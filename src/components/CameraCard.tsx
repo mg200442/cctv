@@ -10,6 +10,7 @@ const BOX_COLOR: Record<AiBox['kind'], string> = {
 interface Props {
   camera: Camera
   isPlayback: boolean
+  isSelected?: boolean
   now: Date
   snapshotUrl: string
   onSelect: () => void
@@ -24,7 +25,7 @@ interface Props {
 function pad(n: number) { return String(n).padStart(2, '0') }
 
 export function CameraCard({
-  camera, isPlayback, now, snapshotUrl,
+  camera, isPlayback, isSelected = false, now, snapshotUrl,
   onSelect, onFullscreen, onStartRec, onStopRec, onShowRecs, onRename, onRemove,
 }: Props) {
   const [showMenu, setShowMenu] = useState(false)
@@ -61,7 +62,11 @@ export function CameraCard({
         border: `2px solid ${borderColor}`,
         boxShadow: glowShadow,
         width: '100%', height: '100%',
-        transition: 'border-color .2s, box-shadow .2s',
+        transition: 'border-color .2s, box-shadow .2s, outline-color .2s',
+        // Focus ring — independent of status border color, so a selected
+        // camera is visibly distinct even while recording/offline/etc.
+        outline: isSelected ? '3px solid #38BDF8' : '3px solid transparent',
+        outlineOffset: 3,
       }}
     >
       {/* Scene background */}

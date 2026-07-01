@@ -7,7 +7,7 @@ import type { Recording } from '@/hooks/useCameras'
 import { ALERTS } from '@/data/cameras'
 import { VideoPlayer } from './VideoPlayer'
 
-type Tab = 'rec' | 'alertas' | 'movimiento'
+export type Tab = 'rec' | 'alertas' | 'movimiento'
 
 function fmtDuration(s: number) {
   if (!s) return null
@@ -30,6 +30,8 @@ interface Props {
   recordings: Recording[]
   onDeleteRecording: (name: string) => Promise<void>
   searchQuery?: string
+  tab: Tab
+  onTabChange: (tab: Tab) => void
 }
 
 const TONE_MAP = {
@@ -46,8 +48,7 @@ const ICON_MAP: Record<string, React.ElementType> = {
 
 const SEV_ORDER: Record<string, number> = { ALTA: 0, MEDIA: 1, BAJA: 2, INFO: 3 }
 
-export function RecPanel({ recordings, onDeleteRecording, searchQuery = '' }: Props) {
-  const [tab, setTab] = useState<Tab>('rec')
+export function RecPanel({ recordings, onDeleteRecording, searchQuery = '', tab, onTabChange }: Props) {
   const [activeRec, setActiveRec] = useState<Recording | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -103,7 +104,7 @@ export function RecPanel({ recordings, onDeleteRecording, searchQuery = '' }: Pr
           return (
             <button
               key={key}
-              onClick={() => setTab(key)}
+              onClick={() => onTabChange(key)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 7,
                 padding: '8px 14px', borderRadius: 10, cursor: 'pointer',

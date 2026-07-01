@@ -28,11 +28,47 @@ interface Props {
   recordings: Recording[]
   onTogglePlay: () => void
   onClickTimeline: (e: React.MouseEvent<HTMLDivElement>) => void
+  onSeek: (pos: number) => void
 }
 
-export function Timeline({ playing, live, pos, recordings, onTogglePlay, onClickTimeline }: Props) {
+// % position along the 24h track for a recording's start time
+function recordingPos(rec: Recording): number | null {
+  if (!rec.time) return null
+  const [hh, mm] = rec.time.split(':').map(Number)
+  return ((hh * 60 + (mm || 0)) / 1440) * 100
+}
+
+export function Timeline({ playing, live, pos, recordings, onTogglePlay, onClickTimeline, onSeek }: Props) {
   const [showRecs, setShowRecs] = useState(false)
   const [activeRec, setActiveRec] = useState<Recording | null>(null)
+  // Names already seen by the user — badge only counts recordings not yet
+  // acknowledged, and clears the moment the panel is opened.
+  const [seenNames, setSeenNames] = useState<Set<string>>(() => new Set())
+  const unseenCount = recordings.filter(r => !seenNames.has(r.name)).length
+
+  const toggleRecs = useCallback(() => {
+    setShowRecs(s => {
+      const next = !s
+      if (next) setSeenNames(new Set(recordings.map(r => r.name)))
+      return next
+    })
+  }, [recordings])
+
+  // Jump the playhead to the previous/next recording's start (wraps around)
+  const jumpToEvent = useCallback((direction: 'prev' | 'next') => {
+    const positions = recordings
+      .map(recordingPos)
+      .filter((p): p is number => p !== null)
+      .sort((a, b) => a - b)
+    if (positions.length === 0) return
+    if (direction === 'next') {
+      const next = positions.find(p => p > pos + 0.05)
+      onSeek(next ?? positions[0])
+    } else {
+      const prev = [...positions].reverse().find(p => p < pos - 0.05)
+      onSeek(prev ?? positions[positions.length - 1])
+    }
+  }, [recordings, pos, onSeek])
 
   const totalMin = Math.round(pos / 100 * 1439)
   const headTime = pad(Math.floor(totalMin / 60)) + ':' + pad(totalMin % 60)
@@ -124,12 +160,20 @@ export function Timeline({ playing, live, pos, recordings, onTogglePlay, onClick
           </button>
 
           <div style={{ display: 'flex', gap: 6 }}>
-            {[SkipBack, SkipForward].map((Icon, i) => (
-              <button key={i} style={{
-                width: 34, height: 34, borderRadius: 9,
-                border: '2px solid #20242A', background: '#0E1012', color: '#C9C4BB',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-              }}>
+            {([['prev', SkipBack], ['next', SkipForward]] as const).map(([dir, Icon]) => (
+              <button
+                key={dir}
+                onClick={() => jumpToEvent(dir)}
+                disabled={recordings.length === 0}
+                title={dir === 'prev' ? 'Evento anterior' : 'Evento siguiente'}
+                style={{
+                  width: 34, height: 34, borderRadius: 9,
+                  border: '2px solid #20242A', background: '#0E1012',
+                  color: recordings.length === 0 ? '#3A3F47' : '#C9C4BB',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: recordings.length === 0 ? 'default' : 'pointer',
+                }}
+              >
                 <Icon size={15} />
               </button>
             ))}
@@ -166,10 +210,8 @@ export function Timeline({ playing, live, pos, recordings, onTogglePlay, onClick
 
           {/* Recording segments — colored by camera, width ≈ estimated duration */}
           {recordings.map((rec, i) => {
-            if (!rec.time) return null
-            const [hh, mm] = rec.time.split(':').map(Number)
-            const startMin = hh * 60 + (mm || 0)
-            const leftPct = (startMin / 1440) * 100
+            const leftPct = recordingPos(rec)
+            if (leftPct === null) return null
             const durationMin = rec.duration ? rec.duration / 60 : FALLBACK_DURATION_MIN
             const widthPct = (durationMin / 1440) * 100
             const color = camColor(rec.cameraId, camIds.indexOf(rec.cameraId))
@@ -181,8 +223,11 @@ export function Timeline({ playing, live, pos, recordings, onTogglePlay, onClick
                 title={`${rec.cameraId.toUpperCase()} · ${rec.date} ${rec.time}`}
                 style={{
                   position: 'absolute', top: 6, height: 26,
+                  // Short recordings (a few seconds) would otherwise round
+                  // down to an almost-invisible sliver on a 24h-wide track.
                   borderRadius: 3, left: leftPct + '%',
-                  width: `max(6px, ${widthPct}%)`,
+                  width: `max(10px, ${widthPct}%)`,
+                  border: `1px solid ${color}`,
                   background: color,
                   opacity: isActive ? 1 : 0.55,
                   cursor: 'pointer', zIndex: 2,
@@ -223,7 +268,7 @@ export function Timeline({ playing, live, pos, recordings, onTogglePlay, onClick
           </div>
 
           <button
-            onClick={() => setShowRecs(s => !s)}
+            onClick={toggleRecs}
             style={{
               display: 'flex', alignItems: 'center', gap: 7,
               padding: '9px 13px', borderRadius: 10, cursor: 'pointer',
@@ -235,14 +280,14 @@ export function Timeline({ playing, live, pos, recordings, onTogglePlay, onClick
           >
             <FolderOpen size={14} />
             GRABACIONES
-            {recordings.length > 0 && (
+            {unseenCount > 0 && (
               <span style={{
                 minWidth: 18, height: 18, borderRadius: 9, padding: '0 5px',
                 background: '#FF5247', color: '#fff', fontSize: 9,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 letterSpacing: 0,
               }}>
-                {recordings.length}
+                {unseenCount}
               </span>
             )}
           </button>

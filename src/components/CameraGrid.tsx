@@ -18,7 +18,7 @@ const GRID_PRESETS = [
 
 interface Props {
   cameras: Camera[]
-  selected: number
+  selected: number | null
   playbackCameraId: string | null
   now: Date
   snapshotUrl: (id: string) => string
@@ -59,7 +59,7 @@ export function CameraGrid({
   }, [showPicker])
 
   const totalSlots = gridCols * gridRows
-  const focusCam = cameras[selected]
+  const focusCam = selected !== null ? cameras[selected] : undefined
   const currentPreset = `${gridCols}×${gridRows}`
 
   return (
@@ -72,7 +72,7 @@ export function CameraGrid({
         <span style={{ fontSize: 11, letterSpacing: '.12em', color: '#7E858C' }}>VISTA EN VIVO</span>
         <span style={{ fontSize: 11, letterSpacing: '.12em', color: '#565C63' }}>·</span>
         <span style={{ fontSize: 11, letterSpacing: '.12em', color: '#ECE8E1' }}>
-          FOCO: {cameras[selected]?.zone ?? '—'}
+          FOCO: {focusCam?.zone ?? '—'}
         </span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           {/* Grid picker */}
@@ -182,10 +182,11 @@ export function CameraGrid({
             <CameraCard
               camera={focusCam}
               isPlayback={playbackCameraId === focusCam.id}
+              isSelected
               now={now}
               snapshotUrl={snapshotUrl(focusCam.id)}
               onSelect={() => {}}
-              onFullscreen={() => onFullscreen(selected)}
+              onFullscreen={() => onFullscreen(selected!)}
               onStartRec={() => onStartRec(focusCam.id)}
               onStopRec={() => onStopRec(focusCam.id)}
               onShowRecs={() => onShowRecs(focusCam.id)}
@@ -202,11 +203,11 @@ export function CameraGrid({
               flexShrink: 0, marginBottom: 8,
             }}>
               <span style={{ fontSize: 9, letterSpacing: '.1em', color: '#565C63' }}>
-                {selected + 1} / {cameras.length}
+                {selected! + 1} / {cameras.length}
               </span>
               <div style={{ display: 'flex', gap: 4 }}>
                 <button
-                  onClick={() => onSelect(selected > 0 ? selected - 1 : cameras.length - 1)}
+                  onClick={() => onSelect(selected! > 0 ? selected! - 1 : cameras.length - 1)}
                   style={{
                     width: 24, height: 24, borderRadius: 6, border: '1px solid #20242A',
                     background: '#0E1012', color: '#7E858C', cursor: 'pointer',
@@ -217,7 +218,7 @@ export function CameraGrid({
                   <ChevronUp size={13} />
                 </button>
                 <button
-                  onClick={() => onSelect(selected < cameras.length - 1 ? selected + 1 : 0)}
+                  onClick={() => onSelect(selected! < cameras.length - 1 ? selected! + 1 : 0)}
                   style={{
                     width: 24, height: 24, borderRadius: 6, border: '1px solid #20242A',
                     background: '#0E1012', color: '#7E858C', cursor: 'pointer',
@@ -276,6 +277,7 @@ export function CameraGrid({
                   key={cam.id}
                   camera={cam}
                   isPlayback={playbackCameraId === cam.id}
+                  isSelected={i === selected}
                   now={now}
                   snapshotUrl={snapshotUrl(cam.id)}
                   onSelect={() => onSelect(i)}

@@ -70,7 +70,7 @@ function parseRecording(item: { name: string; size?: number; duration?: number }
 
 export function useCameras() {
   const [cameras, setCameras] = useState<Camera[]>([])
-  const [selected, setSelected] = useState(0)
+  const [selected, setSelected] = useState<number | null>(0)
   const [loading, setLoading] = useState(true)
   const [serverOk, setServerOk] = useState(false)
   const [recordings, setRecordings] = useState<Recording[]>([])
@@ -163,7 +163,7 @@ export function useCameras() {
     await fetch(`${API}/api/cameras/${id}`, { method: 'DELETE' })
     setCameras(prev => {
       const next = prev.filter(c => c.id !== id)
-      if (selected >= next.length) setSelected(Math.max(0, next.length - 1))
+      if (selected !== null && selected >= next.length) setSelected(next.length ? next.length - 1 : null)
       return next
     })
   }, [selected])

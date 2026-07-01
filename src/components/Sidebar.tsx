@@ -4,13 +4,12 @@ type NavItem = {
   icon: React.ElementType
   label: string
   view: string
-  badge?: number
 }
 
 const NAV_ITEMS: NavItem[] = [
   { icon: LayoutGrid, label: 'EN VIVO', view: 'live' },
   { icon: Clapperboard, label: 'REC', view: 'rec' },
-  { icon: Bell, label: 'ALERTAS', view: 'alertas', badge: 3 },
+  { icon: Bell, label: 'ALERTAS', view: 'alertas' },
   { icon: Activity, label: 'IA', view: 'ia' },
   { icon: MapPin, label: 'MAPA', view: 'mapa' },
   { icon: Cctv, label: 'EQUIPOS', view: 'equipos' },
@@ -18,11 +17,12 @@ const NAV_ITEMS: NavItem[] = [
 
 interface Props {
   activeView: string
+  alertsBadge?: number
   onNav: (view: string) => void
   onOpenSettings: () => void
 }
 
-export function Sidebar({ activeView, onNav, onOpenSettings }: Props) {
+export function Sidebar({ activeView, alertsBadge, onNav, onOpenSettings }: Props) {
   return (
     <aside style={{
       width: 84, flexShrink: 0, background: '#0E1012',
@@ -48,8 +48,9 @@ export function Sidebar({ activeView, onNav, onOpenSettings }: Props) {
 
       {/* Nav */}
       <nav style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', width: '100%' }}>
-        {NAV_ITEMS.map(({ icon: Icon, label, view, badge }) => {
-          const active = activeView === view || (view === 'rec' && activeView === 'alertas')
+        {NAV_ITEMS.map(({ icon: Icon, label, view }) => {
+          const active = activeView === view
+          const badge = view === 'alertas' ? alertsBadge : undefined
           return (
             <button
               key={label}
@@ -65,7 +66,7 @@ export function Sidebar({ activeView, onNav, onOpenSettings }: Props) {
             >
               <Icon size={20} />
               <span style={{ fontSize: 7, letterSpacing: '.06em', fontFamily: 'inherit' }}>{label}</span>
-              {badge !== undefined && (
+              {badge !== undefined && badge > 0 && (
                 <span style={{
                   position: 'absolute', top: 6, right: 8, width: 16, height: 16,
                   borderRadius: '50%', background: '#FF5247', color: '#fff',

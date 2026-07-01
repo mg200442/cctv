@@ -5,7 +5,7 @@ import { CameraGrid } from '@/components/CameraGrid'
 import { RightRail } from '@/components/RightRail'
 import { Timeline } from '@/components/Timeline'
 import { AddCameraModal } from '@/components/AddCameraModal'
-import { RecPanel } from '@/components/RecPanel'
+import { RecPanel, type Tab as RecTab } from '@/components/RecPanel'
 import { FullscreenModal } from '@/components/FullscreenModal'
 import { CameraRecsModal } from '@/components/CameraRecsModal'
 import { SettingsModal } from '@/components/SettingsModal'
@@ -49,6 +49,8 @@ export default function App() {
 
   // Navigation & overlay state
   const [activeView, setActiveView] = useState<string>('live')
+  const [recTab, setRecTab] = useState<RecTab>('rec')
+  const [alertsSeen, setAlertsSeen] = useState(false)
   const [fullscreenIdx, setFullscreenIdx] = useState<number | null>(null)
   const [cameraRecsId, setCameraRecsId] = useState<string | null>(null)
 
@@ -136,12 +138,29 @@ export default function App() {
     setLive(p > 99)
   }, [])
 
+  const seekTo = useCallback((p: number) => {
+    if (playRef.current) clearInterval(playRef.current)
+    setPos(p)
+    setPlaying(false)
+    setLive(p > 99)
+  }, [])
+
   const handleNav = useCallback((view: string) => {
-    if (view === 'alertas') {
+    if (view === 'rec') {
       setActiveView('rec')
+      setRecTab('rec')
+    } else if (view === 'alertas') {
+      setActiveView('rec')
+      setRecTab('alertas')
+      setAlertsSeen(true)
     } else {
       setActiveView(view)
     }
+  }, [])
+
+  const handleRecTabChange = useCallback((t: RecTab) => {
+    setRecTab(t)
+    if (t === 'alertas') setAlertsSeen(true)
   }, [])
 
   const handleSaveSettings = useCallback((gb: number) => {
@@ -151,6 +170,17 @@ export default function App() {
 
   const activeRecordings = cameras.filter(c => c.recording).length
   const isLive = activeView === 'live'
+  const sidebarActiveView = activeView === 'rec' ? recTab : activeView
+  const alertsBadge = alertsSeen ? 0 : ALERTS.length
+
+  const focusedCameraId = selected !== null ? cameras[selected]?.id : undefined
+  const focusedRecordings = focusedCameraId
+    ? recordings.filter(r => r.cameraId === focusedCameraId)
+    : recordings
+
+  const handleSelectCamera = useCallback((i: number) => {
+    setSelected(prev => prev === i ? null : i)
+  }, [setSelected])
 
   const fullscreenCam = fullscreenIdx !== null ? cameras[fullscreenIdx] : null
   const cameraRecsLabel = cameraRecsId
@@ -163,7 +193,7 @@ export default function App() {
       color: '#ECE8E1', fontFamily: "'DM Mono', monospace",
       display: 'flex', overflow: 'hidden', position: 'relative',
     }}>
-      <Sidebar activeView={activeView} onNav={handleNav} onOpenSettings={() => setShowSettings(true)} />
+      <Sidebar activeView={sidebarActiveView} alertsBadge={alertsBadge} onNav={handleNav} onOpenSettings={() => setShowSettings(true)} />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <Header
@@ -185,7 +215,7 @@ export default function App() {
                 playbackCameraId={cameraRecsId}
                 now={now}
                 snapshotUrl={snapshotUrl}
-                onSelect={setSelected}
+                onSelect={handleSelectCamera}
                 onAddClick={() => setShowAddModal(true)}
                 onStartRec={startRecording}
                 onStopRec={stopRecording}
@@ -207,6 +237,8 @@ export default function App() {
               recordings={recordings}
               onDeleteRecording={deleteRecording}
               searchQuery={searchQuery}
+              tab={recTab}
+              onTabChange={handleRecTabChange}
             />
           )}
         </div>
@@ -215,9 +247,10 @@ export default function App() {
           playing={playing}
           live={live}
           pos={pos}
-          recordings={recordings}
+          recordings={focusedRecordings}
           onTogglePlay={togglePlay}
           onClickTimeline={clickTimeline}
+          onSeek={seekTo}
         />
       </div>
 
