@@ -238,6 +238,7 @@ export default function App() {
               onDeleteRecording={deleteRecording}
               searchQuery={searchQuery}
               tab={recTab}
+              visibleTabs={recTab === 'rec' ? ['rec'] : ['alertas', 'movimiento']}
               onTabChange={handleRecTabChange}
             />
           )}

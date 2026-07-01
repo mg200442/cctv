@@ -31,6 +31,7 @@ interface Props {
   onDeleteRecording: (name: string) => Promise<void>
   searchQuery?: string
   tab: Tab
+  visibleTabs: Tab[]
   onTabChange: (tab: Tab) => void
 }
 
@@ -48,7 +49,7 @@ const ICON_MAP: Record<string, React.ElementType> = {
 
 const SEV_ORDER: Record<string, number> = { ALTA: 0, MEDIA: 1, BAJA: 2, INFO: 3 }
 
-export function RecPanel({ recordings, onDeleteRecording, searchQuery = '', tab, onTabChange }: Props) {
+export function RecPanel({ recordings, onDeleteRecording, searchQuery = '', tab, visibleTabs, onTabChange }: Props) {
   const [activeRec, setActiveRec] = useState<Recording | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -88,12 +89,13 @@ export function RecPanel({ recordings, onDeleteRecording, searchQuery = '', tab,
     { key: 'rec', label: 'GRABACIONES', icon: Clapperboard, count: recordings.length },
     { key: 'alertas', label: 'ALERTAS', icon: Bell, count: ALERTS.length },
     { key: 'movimiento', label: 'MOVIMIENTO', icon: Activity, count: motionAlerts.length },
-  ]
+  ].filter(t => visibleTabs.includes(t.key))
 
   return (
     <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-      {/* Tab bar */}
+      {/* Tab bar — only shown when there's more than one section to switch between */}
+      {TABS.length > 1 && (
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6,
         padding: '14px 20px', borderBottom: '2px solid #20242A',
@@ -131,6 +133,7 @@ export function RecPanel({ recordings, onDeleteRecording, searchQuery = '', tab,
           )
         })}
       </div>
+      )}
 
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
