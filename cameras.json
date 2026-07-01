@@ -4,6 +4,15 @@
     "label": "HOLA MUNDO",
     "zone": "Entrada Principal",
     "rtsp": "rtsp://admin:admin@192.168.138.3:554/video1",
-    "enabled": true
+    "enabled": true,
+    "mac": "54:77:87:5d:55:9d"
+  },
+  {
+    "id": "cam-02",
+    "label": "Cocina",
+    "zone": "Cocina",
+    "rtsp": "rtsp://admin:admin@192.168.138.9:554/video1",
+    "enabled": true,
+    "mac": "54:77:87:57:d5:87"
   }
 ]

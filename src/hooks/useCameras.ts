@@ -3,38 +3,32 @@ import type { Camera, ServerCamera } from '@/types/camera'
 
 const API = ''
 
-const SCENE_DATA: Record<string, Pick<Camera, 'scene' | 'boxes' | 'offline' | 'fps'>> = {
+// Purely cosmetic per-slot background/fps dressing (shown behind/around the
+// real video feed) — `boxes` is intentionally NOT part of this: there is no
+// AI detection backend, so box overlays are never fabricated (see mergeScene).
+const SCENE_DATA: Record<string, Pick<Camera, 'scene' | 'offline' | 'fps'>> = {
   'cam-01': {
     scene: 'radial-gradient(130% 95% at 50% 118%, #3a2a16 0%, #1a130b 42%, #0a0a0b 100%)',
-    boxes: [],
     fps: '15fps',
   },
   'cam-02': {
     scene: 'linear-gradient(180deg, #0b1925 0%, #0a1018 55%, #060a0e 100%)',
-    boxes: [
-      { x: 16, y: 46, w: 30, h: 32, label: 'VEHICULO 91%', kind: 'cyan' },
-      { x: 64, y: 40, w: 12, h: 38, label: 'PERSONA 87%', kind: 'accent' },
-    ],
     fps: '25fps',
   },
   'cam-03': {
     scene: 'radial-gradient(110% 90% at 32% 14%, #232a38 0%, #121620 50%, #0a0c10 100%)',
-    boxes: [],
     fps: '25fps',
   },
   'cam-04': {
     scene: 'radial-gradient(120% 110% at 50% 38%, #0f2a1b 0%, #08160e 55%, #050b07 100%)',
-    boxes: [{ x: 44, y: 26, w: 15, h: 56, label: 'PERSONA 94%', kind: 'accent' }],
     fps: '25fps',
   },
   'cam-05': {
     scene: 'linear-gradient(180deg, #0a0f1c 0%, #070a12 60%, #04060a 100%)',
-    boxes: [{ x: 70, y: 34, w: 14, h: 48, label: 'MOVIMIENTO', kind: 'red' }],
     fps: '25fps',
   },
   'cam-06': {
     scene: 'linear-gradient(180deg, #141414 0%, #0c0c0c 100%)',
-    boxes: [],
     offline: true,
     fps: 'OFFLINE',
   },
@@ -42,7 +36,6 @@ const SCENE_DATA: Record<string, Pick<Camera, 'scene' | 'boxes' | 'offline' | 'f
 
 const DEFAULT_SCENE = {
   scene: 'radial-gradient(100% 100% at 50% 50%, #1a1a2e 0%, #0d0d1a 100%)',
-  boxes: [],
   fps: '—',
 }
 
@@ -51,6 +44,7 @@ function mergeScene(cam: ServerCamera): Camera {
   return {
     ...cam,
     ...scene,
+    boxes: [], // no real AI detection backend exists — never fabricate boxes over a live feed
     offline: scene.offline && !cam.streaming,
   }
 }

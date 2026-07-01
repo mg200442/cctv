@@ -217,6 +217,13 @@ app.post('/api/cameras', (req, res) => {
 
   const id = 'cam-' + String(cameras.length + 1).padStart(2, '0')
   const camera = { id, label, zone: zone || '', rtsp, enabled: true }
+  // Record the MAC at add-time as a baseline for future IP-conflict detection
+  // in /api/discover (best-effort — camera may not be ARP-resolvable yet).
+  const ipMatch = rtsp.match(/\b(\d+\.\d+\.\d+\.\d+)\b/)
+  if (ipMatch) {
+    const mac = getMac(ipMatch[1])
+    if (mac) camera.mac = mac
+  }
   cameras.push(camera)
   saveConfig(cameras)
   res.status(201).json(camera)
@@ -503,7 +510,10 @@ function detectVendor(openPorts, banner) {
 function testRtsp(url) {
   return new Promise(resolve => {
     const proc = spawn(FFMPEG, [
-      '-loglevel', 'error',
+      // 'info' (not 'error'): the "Stream ... Video:" banner we grep for
+      // below is only emitted at info level — at 'error' it never prints,
+      // which silently made every verification fail even for a working feed.
+      '-loglevel', 'info',
       '-rtsp_transport', 'tcp',
       '-i', url,
       '-frames:v', '1',
@@ -541,7 +551,36 @@ function pingArgs(ip) {
   return ['-c', '1', '-W', '1', ip] // Linux: minimum whole-second timeout
 }
 
-// Ping sweep → ARP read: returns IPs of live hosts on the given subnet
+// Read the OS ARP/neighbor table → Map<ip, mac>. `arp -an` works on both
+// macOS and Linux (net-tools); minimal Linux installs without net-tools
+// fall back to `ip neigh` (iproute2).
+function readArpTable() {
+  const table = new Map()
+  let arpOut = ''
+  try {
+    arpOut = execSync('arp -an 2>/dev/null').toString()
+  } catch {}
+  for (const m of arpOut.matchAll(/\((\d+\.\d+\.\d+\.\d+)\) at (?!incomplete)([0-9a-f:]+)/gi)) {
+    table.set(m[1], m[2].toLowerCase())
+  }
+  if (table.size === 0) {
+    try {
+      const neighOut = execSync('ip neigh show 2>/dev/null').toString()
+      for (const m of neighOut.matchAll(/^(\d+\.\d+\.\d+\.\d+)\s+.*lladdr\s+([0-9a-f:]+)/gim)) {
+        table.set(m[1], m[2].toLowerCase())
+      }
+    } catch {}
+  }
+  return table
+}
+
+// Look up the current MAC address for a single IP (used when adding a
+// camera, so we can record a MAC baseline for future conflict detection).
+function getMac(ip) {
+  return readArpTable().get(ip) ?? null
+}
+
+// Ping sweep → ARP read: returns {ip, mac} for live hosts on the given subnets
 // Much faster than blind TCP scan — only probes hosts that actually exist
 async function discoverLiveHosts(subnets) {
   // 1. Parallel ping sweep to populate the ARP table
@@ -558,25 +597,8 @@ async function discoverLiveHosts(subnets) {
   await Promise.all(pings)
 
   // 2. Read ARP table — only entries with a resolved MAC (incomplete = dead host)
-  // `arp -an` works on both macOS and Linux (net-tools); minimal Linux
-  // installs without net-tools fall back to `ip neigh` (iproute2).
-  const live = new Set()
-  let arpOut = ''
-  try {
-    arpOut = execSync('arp -an 2>/dev/null').toString()
-  } catch {}
-  for (const m of arpOut.matchAll(/\((\d+\.\d+\.\d+\.\d+)\) at (?!incomplete)([0-9a-f:]+)/gi)) {
-    live.add(m[1])
-  }
-  if (live.size === 0) {
-    try {
-      const neighOut = execSync('ip neigh show 2>/dev/null').toString()
-      for (const m of neighOut.matchAll(/^(\d+\.\d+\.\d+\.\d+)\s+.*lladdr\s+[0-9a-f:]+/gim)) {
-        live.add(m[1])
-      }
-    } catch {}
-  }
-  return [...live]
+  const table = readArpTable()
+  return [...table.entries()].map(([ip, mac]) => ({ ip, mac }))
 }
 
 // Discovery:
@@ -593,25 +615,43 @@ app.get('/api/discover', async (_req, res) => {
   const subnets = getActiveSubnets()
   console.log('  Discover: live-host sweep on', subnets.join(', '))
 
-  const existing = new Set(
-    loadConfig()
-      .map(c => { const m = c.rtsp.match(/\b(\d+\.\d+\.\d+\.\d+)\b/); return m?.[1] ?? null })
+  const cameras = loadConfig()
+  // Map configured camera IP → camera object (to compare against live MACs)
+  const existingByIp = new Map(
+    cameras
+      .map(c => { const m = c.rtsp.match(/\b(\d+\.\d+\.\d+\.\d+)\b/); return m ? [m[1], c] : null })
       .filter(Boolean)
   )
 
-  // Phase 1: ping sweep → ARP → list of live IPs
-  const liveHosts = (await discoverLiveHosts(subnets))
-    .filter(ip => !existing.has(ip))
+  // Phase 1: ping sweep → ARP → list of live {ip, mac}
+  const allLive = await discoverLiveHosts(subnets)
 
-  console.log(`  Discover: ${liveHosts.length} live hosts found (excluding already configured)`)
+  // Cameras already configured, seen with the SAME mac we recorded when they
+  // were added → same physical device, nothing new to report. Cameras whose
+  // IP is reused by a DIFFERENT mac are a real conflict (e.g. two Zosi units
+  // sharing the same factory-default IP) and are kept as candidates, flagged.
+  // Cameras with no stored mac yet (added before this existed) get a
+  // one-time baseline backfill instead of being flagged as a conflict.
+  let configDirty = false
+  const liveHosts = []
+  for (const { ip, mac } of allLive) {
+    const cam = existingByIp.get(ip)
+    if (!cam) { liveHosts.push({ ip, mac, conflictsWith: null }); continue }
+    if (!cam.mac) { cam.mac = mac; configDirty = true; continue }
+    if (cam.mac === mac) continue // confirmed same device — nothing to surface
+    liveHosts.push({ ip, mac, conflictsWith: { id: cam.id, label: cam.label } })
+  }
+  if (configDirty) saveConfig(cameras)
+
+  console.log(`  Discover: ${liveHosts.length} live hosts found (excluding already-confirmed cameras)`)
 
   // Phase 2: probe RTSP ports only on live hosts (small set, no batching needed)
   const rtspHosts = []
   await Promise.all(
-    liveHosts.flatMap(ip =>
+    liveHosts.flatMap(({ ip, mac, conflictsWith }) =>
       RTSP_PORTS.map(port =>
         tcpProbe(ip, port, TCP_TIMEOUT).then(open => {
-          if (open) rtspHosts.push({ ip, port })
+          if (open) rtspHosts.push({ ip, mac, conflictsWith, port })
         })
       )
     )
@@ -626,9 +666,11 @@ app.get('/api/discover', async (_req, res) => {
   //   'reject'   → drop (HTTP server, or no response at all)
   const confirmed = (
     await Promise.all(
-      rtspHosts.map(async ({ ip, port }) => {
+      rtspHosts.map(async ({ ip, mac, conflictsWith, port }) => {
         const verdict = await rtspOptionsProbe(ip, port)
-        return verdict !== 'reject' ? { ip, rtspPort: port, rtspConfirmed: verdict === 'rtsp' } : null
+        return verdict !== 'reject'
+          ? { ip, mac, conflictsWith, rtspPort: port, rtspConfirmed: verdict === 'rtsp' }
+          : null
       })
     )
   ).filter(Boolean)
@@ -636,7 +678,7 @@ app.get('/api/discover', async (_req, res) => {
   if (confirmed.length === 0) return res.json([])
 
   // Phase 3: fingerprint (secondary ports + HTTP) — only for confirmed cameras
-  const results = await Promise.all(confirmed.map(async ({ ip, rtspPort, rtspConfirmed }) => {
+  const results = await Promise.all(confirmed.map(async ({ ip, mac, conflictsWith, rtspPort, rtspConfirmed }) => {
     const secProbes = await Promise.all(
       SECONDARY_PORTS.map(p => tcpProbe(ip, p, TCP_TIMEOUT).then(open => open ? p : null))
     )
@@ -648,7 +690,7 @@ app.get('/api/discover', async (_req, res) => {
     const candidates = CREDENTIALS.flatMap(cred =>
       paths.map(path => `rtsp://${cred}@${ip}:${rtspPort}${path}`)
     )
-    return { ip, rtspPort, openPorts, vendor, candidates, verified: null, rtspConfirmed }
+    return { ip, mac, conflictsWith, rtspPort, openPorts, vendor, candidates, verified: null, rtspConfirmed }
   }))
 
   // Phase 4: ffmpeg verify to find the working URL per camera
