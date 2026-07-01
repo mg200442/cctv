@@ -1,0 +1,9 @@
+[
+  {
+    "id": "cam-01",
+    "label": "HOLA MUNDO",
+    "zone": "Entrada Principal",
+    "rtsp": "rtsp://admin:admin@192.168.138.3:554/video1",
+    "enabled": true
+  }
+]
