@@ -14,5 +14,13 @@
     "rtsp": "rtsp://admin:admin@192.168.138.9:554/video1",
     "enabled": true,
     "mac": "54:77:87:57:d5:87"
+  },
+  {
+    "id": "cam-03",
+    "label": "Cámara 4",
+    "zone": "",
+    "rtsp": "rtsp://admin:admin@192.168.138.5:554/video1",
+    "enabled": true,
+    "mac": "54:77:87:57:d5:94"
   }
 ]

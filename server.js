@@ -293,13 +293,19 @@ app.get('/snapshot/:id', (req, res) => {
     return res.send(entry.latestFrame)
   }
 
-  // Wait up to 4s for the first frame
+  // Wait up to 4s for the first frame. Guarded against the race where the
+  // deadline fires and responds 503 right as a frame arrives — without the
+  // headersSent check, the interval would try to send a second response
+  // and crash the whole process with ERR_HTTP_HEADERS_SENT (this happened
+  // in practice with a freshly-added camera whose first frame took just
+  // over 4s to arrive).
   const deadline = setTimeout(() => {
+    clearInterval(check)
     if (!res.headersSent) res.status(503).send('No frame yet')
   }, 4000)
 
   const check = setInterval(() => {
-    if (entry.latestFrame) {
+    if (entry.latestFrame && !res.headersSent) {
       clearInterval(check)
       clearTimeout(deadline)
       res.setHeader('Content-Type', 'image/jpeg')

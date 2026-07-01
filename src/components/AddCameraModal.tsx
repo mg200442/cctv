@@ -200,14 +200,22 @@ function DiscoverTab({ onAdd, onClose }: { onAdd: Props['onAdd']; onClose: () =>
       {scanned && found.length === 0 && !scanning && (
         <div style={{
           padding: '14px', border: '2px solid #20242A', borderRadius: 10,
-          background: '#0A0C0E', textAlign: 'center',
+          background: '#0A0C0E',
         }}>
-          <p style={{ fontSize: 11, color: '#7E858C', letterSpacing: '.04em', marginBottom: 6 }}>
-            No se encontraron cámaras nuevas.
+          <p style={{ fontSize: 11, color: '#7E858C', letterSpacing: '.04em', marginBottom: 8, textAlign: 'center' }}>
+            No se encontraron cámaras nuevas. Antes de reintentar, comprueba en orden:
           </p>
-          <p style={{ fontSize: 9, color: '#565C63', letterSpacing: '.04em', lineHeight: 1.6 }}>
-            Comprueba que la cámara está encendida y conectada a la red.<br />
-            Si es Zosi, asegúrate de que los alias de red están activos.
+          <ol style={{
+            fontSize: 9, color: '#565C63', letterSpacing: '.03em', lineHeight: 1.8,
+            margin: 0, paddingLeft: 16,
+          }}>
+            <li>Alimentación de la cámara: LED encendido.</li>
+            <li>Cable de red bien encajado en ambos extremos (cámara y router).</li>
+            <li>El puerto del router muestra LED de enlace/actividad junto al puerto usado.</li>
+            <li>Si es Zosi u otra marca con IP fija de fábrica fuera de tu LAN habitual: puede necesitar un alias de red en este equipo para ser alcanzable — ver README/CLAUDE.md, sección de red.</li>
+          </ol>
+          <p style={{ fontSize: 9, color: '#565C63', letterSpacing: '.04em', lineHeight: 1.6, marginTop: 8, textAlign: 'center' }}>
+            Si con los 3 primeros puntos confirmados sigue sin aparecer, es probable que la unidad o el cable estén defectuosos.
           </p>
         </div>
       )}
