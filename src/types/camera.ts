@@ -17,6 +17,7 @@ export interface ServerCamera {
   rtsp: string
   enabled: boolean
   motionEnabled?: boolean
+  motionAction?: 'record' | 'snapshot'
   streaming: boolean
   live: boolean
   recording: boolean
@@ -44,4 +45,5 @@ export interface Alert {
   icon: string
   tone: 'red' | 'amber' | 'cyan' | 'green'
   recording?: string // filename of the recording that captured this alert, if any
+  snapshot?: string  // filename of the still snapshot that captured this alert (mutually exclusive with recording)
 }

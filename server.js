@@ -17,10 +17,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 
 const PORT = process.env.PORT || 3001
 const RECORDINGS_DIR = join(__dirname, 'recordings')
+const SNAPSHOTS_DIR = join(__dirname, 'snapshots')
 const CONFIG_FILE = join(__dirname, 'cameras.json')
 const ALERTS_FILE = join(__dirname, 'alerts.json')
 
 mkdirSync(RECORDINGS_DIR, { recursive: true })
+mkdirSync(SNAPSHOTS_DIR, { recursive: true })
 
 // --- ffmpeg resolution (portable across machines/OSes) ---
 // Order: explicit override → bundled static binary (ffmpeg-static, matches
@@ -433,7 +435,13 @@ async function motionTickForCamera(camera) {
         track.lastAlertTime = now
         const d = new Date()
         const pad2 = n => String(n).padStart(2, '0')
-        const recordingFile = autoRecordOnMotion(camera)
+        // Per-camera choice of what motion detection does when it fires:
+        // record a video clip (default, existing behavior) or just save a
+        // still snapshot — cheaper, and enough for cameras where a full
+        // clip isn't needed.
+        const useSnapshot = camera.motionAction === 'snapshot'
+        const recordingFile = useSnapshot ? null : autoRecordOnMotion(camera)
+        const snapshotFile = useSnapshot ? saveMotionSnapshot(camera, entry) : null
         addAlert({
           id: `${camera.id}_${d.getTime()}`,
           cameraId: camera.id,
@@ -446,6 +454,7 @@ async function motionTickForCamera(camera) {
           icon: 'radar',
           tone: 'cyan',
           recording: recordingFile,
+          snapshot: snapshotFile,
         })
         console.log(`  Motion: alert for ${camera.id} (${pct.toFixed(1)}% changed)`)
       }
@@ -594,7 +603,7 @@ app.post('/api/cameras', (req, res) => {
 
 // Rename / update camera label & zone
 app.patch('/api/cameras/:id', (req, res) => {
-  const { label, zone, enabled, motionEnabled } = req.body
+  const { label, zone, enabled, motionEnabled, motionAction } = req.body
   const cameras = loadConfig()
   const cam = cameras.find(c => c.id === req.params.id)
   if (!cam) return res.status(404).json({ error: 'Not found' })
@@ -602,6 +611,7 @@ app.patch('/api/cameras/:id', (req, res) => {
   if (zone !== undefined) cam.zone = zone.trim()
   if (typeof enabled === 'boolean') cam.enabled = enabled
   if (typeof motionEnabled === 'boolean') cam.motionEnabled = motionEnabled
+  if (motionAction === 'record' || motionAction === 'snapshot') cam.motionAction = motionAction
   saveConfig(cameras)
   if (typeof enabled === 'boolean' || typeof motionEnabled === 'boolean') {
     // Free CPU immediately when nothing needs this camera's stream anymore
@@ -765,6 +775,25 @@ const MOTION_RECORD_DURATION_MS = 20_000
 // Returns the filename (not full path) of whatever recording is now covering
 // this motion event, so the caller can stamp it onto the alert — lets the
 // dashboard link straight from "ALERTAS EN VIVO" to the clip that captured it.
+// Saves the camera's current live frame as a JPEG — the "snapshot" motion
+// action, an alternative to auto-recording video for cameras/situations
+// where a still image is enough (cheaper on disk, nothing to finalize).
+function saveMotionSnapshot(camera, entry) {
+  if (!entry.latestFrame) return null
+  const d = new Date()
+  const pad = n => String(n).padStart(2, '0')
+  const ts = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`
+  const name = `${camera.id}_${ts}.jpg`
+  try {
+    writeFileSync(join(SNAPSHOTS_DIR, name), entry.latestFrame)
+    console.log(`  Motion: snapshot saved for ${camera.id}`)
+    return name
+  } catch (e) {
+    console.error(`  ✗ Failed to save motion snapshot for ${camera.id}:`, e.message)
+    return null
+  }
+}
+
 function autoRecordOnMotion(camera) {
   const active = recordings.get(camera.id)
   if (active && !active.auto) return basename(active.file) // manual recording — don't touch it, but it's still covering this moment
@@ -895,6 +924,55 @@ app.get('/recordings/:file', (req, res) => {
   const file = join(RECORDINGS_DIR, req.params.file)
   if (!existsSync(file)) return res.status(404).send('Not found')
   res.sendFile(file)
+})
+
+// ─── Snapshots (motion-detection "snapshot" action — mirrors recordings) ────────
+
+app.get('/api/snapshots', (_req, res) => {
+  try {
+    const files = readdirSync(SNAPSHOTS_DIR)
+      .filter(f => f.endsWith('.jpg'))
+      .sort()
+      .map(f => {
+        const { size } = statSync(join(SNAPSHOTS_DIR, f))
+        return { name: f, size }
+      })
+    res.json(files)
+  } catch {
+    res.json([])
+  }
+})
+
+app.get('/snapshots/:file', (req, res) => {
+  const file = join(SNAPSHOTS_DIR, req.params.file)
+  if (!existsSync(file)) return res.status(404).send('Not found')
+  res.sendFile(file)
+})
+
+app.delete('/api/snapshots', (_req, res) => {
+  let deleted = 0, skipped = 0
+  try {
+    for (const name of readdirSync(SNAPSHOTS_DIR)) {
+      if (!name.endsWith('.jpg')) continue
+      try { unlinkSync(join(SNAPSHOTS_DIR, name)); deleted++ } catch { skipped++ }
+    }
+  } catch {}
+  res.json({ ok: true, deleted, skipped })
+})
+
+app.delete(/^\/api\/snapshots\/(.+)$/, (req, res) => {
+  const filename = decodeURIComponent(req.params[0])
+  if (!filename.endsWith('.jpg') || filename.includes('/') || filename.includes('..')) {
+    return res.status(400).json({ error: 'Invalid filename' })
+  }
+  const file = join(SNAPSHOTS_DIR, filename)
+  if (!existsSync(file)) return res.status(404).json({ error: 'Not found' })
+  try {
+    unlinkSync(file)
+    res.json({ ok: true })
+  } catch {
+    res.status(500).json({ error: 'Could not delete file' })
+  }
 })
 
 // ─── Alerts (real, generated by motion detection) ───────────────────────────────

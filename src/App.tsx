@@ -259,8 +259,6 @@ export default function App() {
           onSearch={setSearchQuery}
           allPaused={allCamerasPaused}
           onToggleAllPaused={toggleAllPaused}
-          motionActive={motionActive}
-          onToggleMotion={toggleMotion}
           networkOk={networkOk}
           repairingNetwork={repairingNetwork}
           onRepairNetwork={repairNetwork}
@@ -315,6 +313,8 @@ export default function App() {
               tab={recTab}
               visibleTabs={recTab === 'rec' ? ['rec'] : ['alertas', 'movimiento']}
               onTabChange={handleRecTabChange}
+              motionActive={motionActive}
+              onToggleMotion={toggleMotion}
             />
           )}
         </div>

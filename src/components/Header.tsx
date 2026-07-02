@@ -1,4 +1,4 @@
-import { Search, Cctv, PauseCircle, PlayCircle, Radar, WifiOff, Wrench } from 'lucide-react'
+import { Search, Cctv, PauseCircle, PlayCircle, WifiOff, Wrench } from 'lucide-react'
 
 interface Props {
   now: Date
@@ -10,8 +10,6 @@ interface Props {
   onSearch: (q: string) => void
   allPaused: boolean
   onToggleAllPaused: () => void
-  motionActive: boolean
-  onToggleMotion: () => void
   networkOk: boolean
   repairingNetwork: boolean
   onRepairNetwork: () => void
@@ -24,7 +22,7 @@ const MESES = ['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV'
 
 export function Header({
   now, serverOk, activeRecordings, camerasMax, camerasOnline, searchQuery, onSearch,
-  allPaused, onToggleAllPaused, motionActive, onToggleMotion,
+  allPaused, onToggleAllPaused,
   networkOk, repairingNetwork, onRepairNetwork,
 }: Props) {
   const timeStr = pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds())
@@ -155,23 +153,6 @@ export function Header({
         >
           {allPaused ? <PlayCircle size={16} /> : <PauseCircle size={16} />}
           {allPaused ? 'REANUDAR TODO' : 'PAUSAR TODO'}
-        </button>
-
-        {/* Motion detection — global start/pause across all cameras */}
-        <button
-          onClick={onToggleMotion}
-          title={motionActive ? 'Pausar detección de movimiento' : 'Iniciar detección de movimiento'}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 7,
-            padding: '8px 14px', borderRadius: 12, cursor: 'pointer',
-            border: `2px solid ${motionActive ? '#38BDF8' : '#20242A'}`,
-            background: motionActive ? '#0B1620' : '#0E1012',
-            color: motionActive ? '#38BDF8' : '#7E858C',
-            fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: '.06em',
-          }}
-        >
-          <Radar size={16} className={motionActive ? 'live-dot' : ''} />
-          {motionActive ? 'DETECCIÓN ACTIVA' : 'DETECTAR MOVIMIENTO'}
         </button>
 
         <div style={{ width: 2, height: 36, background: '#20242A' }} />

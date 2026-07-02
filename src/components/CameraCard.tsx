@@ -154,18 +154,22 @@ export function CameraCard({
               <span style={{ fontSize: 8, letterSpacing: '.1em', color: '#38BDF8' }}>MOVIMIENTO</span>
             </div>
           )}
-          {!motionEnabled && (
-            <div
-              title="Detección de movimiento desactivada para esta cámara"
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                width: 20, height: 20, borderRadius: 6,
-                background: 'rgba(8,9,10,.6)', border: '1px solid rgba(255,255,255,.1)',
-              }}
-            >
-              <Radar size={10} color="#3A3F47" />
-            </div>
-          )}
+          {/* Persistent per-camera motion-detection state — shown always (not
+              just when off), so it's clear at a glance which cameras are
+              being watched without opening the menu. The pulsing
+              "MOVIMIENTO" pill above only appears during an active
+              detection event; this is the resting on/off indicator. */}
+          <div
+            title={motionEnabled ? 'Detección de movimiento activada' : 'Detección de movimiento desactivada para esta cámara'}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 20, height: 20, borderRadius: 6,
+              background: motionEnabled ? 'rgba(56,189,248,.15)' : 'rgba(8,9,10,.6)',
+              border: motionEnabled ? '1px solid rgba(56,189,248,.5)' : '1px solid rgba(255,255,255,.1)',
+            }}
+          >
+            <Radar size={10} color={motionEnabled ? '#38BDF8' : '#3A3F47'} />
+          </div>
           {!camera.offline && (
             <button
               onClick={e => { e.stopPropagation(); camera.recording ? onStopRec() : onStartRec() }}

@@ -35,6 +35,8 @@ interface Props {
   tab: Tab
   visibleTabs: Tab[]
   onTabChange: (tab: Tab) => void
+  motionActive: boolean
+  onToggleMotion: () => void
 }
 
 const TONE_MAP = {
@@ -51,7 +53,10 @@ const ICON_MAP: Record<string, React.ElementType> = {
 
 const SEV_ORDER: Record<string, number> = { ALTA: 0, MEDIA: 1, BAJA: 2, INFO: 3 }
 
-export function RecPanel({ recordings, alerts, onDeleteRecording, onDeleteAllRecordings, searchQuery = '', tab, visibleTabs, onTabChange }: Props) {
+export function RecPanel({
+  recordings, alerts, onDeleteRecording, onDeleteAllRecordings, searchQuery = '', tab, visibleTabs, onTabChange,
+  motionActive, onToggleMotion,
+}: Props) {
   const [activeRec, setActiveRec] = useState<Recording | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -451,8 +456,28 @@ export function RecPanel({ recordings, alerts, onDeleteRecording, onDeleteAllRec
         {/* ── MOVIMIENTO ── */}
         {tab === 'movimiento' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ fontSize: 9, letterSpacing: '.12em', color: '#7E858C', marginBottom: 6 }}>
-              DETECCIÓN DE MOVIMIENTO · {motionAlerts.length} EVENTOS
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <div style={{ fontSize: 9, letterSpacing: '.12em', color: '#7E858C' }}>
+                DETECCIÓN DE MOVIMIENTO · {motionAlerts.length} EVENTOS
+              </div>
+              {/* Global start/pause, moved here from the header so the
+                  control lives with the section it belongs to instead of
+                  floating in the top bar regardless of which view is open. */}
+              <button
+                onClick={onToggleMotion}
+                title={motionActive ? 'Pausar detección de movimiento' : 'Iniciar detección de movimiento'}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 7,
+                  padding: '8px 14px', borderRadius: 10, cursor: 'pointer',
+                  border: `2px solid ${motionActive ? '#38BDF8' : '#20242A'}`,
+                  background: motionActive ? '#0B1620' : '#0E1012',
+                  color: motionActive ? '#38BDF8' : '#7E858C',
+                  fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: '.06em',
+                }}
+              >
+                <Radar size={14} className={motionActive ? 'live-dot' : ''} />
+                {motionActive ? 'DETECCIÓN ACTIVA' : 'DETECTAR MOVIMIENTO'}
+              </button>
             </div>
             {motionAlerts.map((al, i) => {
               const { color, bg } = TONE_MAP[al.tone]

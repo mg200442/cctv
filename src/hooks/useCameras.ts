@@ -215,6 +215,15 @@ export function useCameras() {
     await fetchCameras()
   }, [fetchCameras])
 
+  const setCameraMotionAction = useCallback(async (id: string, motionAction: 'record' | 'snapshot') => {
+    await fetch(`${API}/api/cameras/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motionAction }),
+    })
+    await fetchCameras()
+  }, [fetchCameras])
+
   const addCamera = useCallback(async (label: string, zone: string, rtsp: string) => {
     const res = await fetch(`${API}/api/cameras`, {
       method: 'POST',
@@ -245,6 +254,9 @@ export function useCameras() {
   }, [fetchCameras])
 
   const snapshotUrl = (id: string) => `${API}/snapshot/${id}`
+  // Distinct from snapshotUrl above (that's the live-view JPEG poll target)
+  // — this points at a saved motion-detection snapshot file on disk.
+  const motionSnapshotUrl = (name: string) => `${API}/snapshots/${name}`
 
   const deleteRecording = useCallback(async (name: string) => {
     const res = await fetch(`${API}/api/recordings/${encodeURIComponent(name)}`, { method: 'DELETE' })
@@ -257,6 +269,11 @@ export function useCameras() {
     if (!res.ok) throw new Error('Failed to delete recordings')
     await fetchRecordings()
   }, [fetchRecordings])
+
+  const deleteAllSnapshots = useCallback(async () => {
+    const res = await fetch(`${API}/api/snapshots`, { method: 'DELETE' })
+    if (!res.ok) throw new Error('Failed to delete snapshots')
+  }, [])
 
   const startMotion = useCallback(async () => {
     await fetch(`${API}/api/motion/start`, { method: 'POST' })
@@ -274,8 +291,8 @@ export function useCameras() {
     loading, serverOk, recordings, diskPercent, recordingsSizeBytes,
     alerts, motionActive, startMotion, stopMotion,
     networkOk, repairingNetwork, repairNetwork,
-    addCamera, renameCamera, removeCamera, toggleCameraEnabled, toggleCameraMotion,
+    addCamera, renameCamera, removeCamera, toggleCameraEnabled, toggleCameraMotion, setCameraMotionAction,
     startRecording, stopRecording,
-    snapshotUrl, fetchRecordings, deleteRecording, deleteAllRecordings,
+    snapshotUrl, motionSnapshotUrl, fetchRecordings, deleteRecording, deleteAllRecordings, deleteAllSnapshots,
   }
 }
