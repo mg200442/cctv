@@ -49,6 +49,43 @@ function resolveFfmpeg() {
 const FFMPEG = resolveFfmpeg()
 console.log(`  ffmpeg: ${FFMPEG}`)
 
+// --- Optional hardware-accelerated decode for the live-view transcode ---
+// Off by default, opt-in via FFMPEG_HWACCEL — measured on this machine with
+// the bundled ffmpeg-static build (which does have `videotoolbox` compiled
+// in, confirmed via `ffmpeg -hwaccels`) and it was NOT a reliable win: two
+// back-to-back A/B runs against the same live camera gave contradictory
+// results (one run hwaccel was ~40% *more* CPU, another ~25% less) — under
+// this machine's actual load (3 concurrent streams + motion detection
+// already running) the measurement is too noisy to trust, and the
+// `-vf scale=...` software filter after a hardware decode forces a
+// hw-surface→system-memory copy every frame that can offset or exceed the
+// decode-side savings. Rather than gamble a regression on a change that's
+// hard to verify live, this stays a manual, per-deployment toggle: set
+// FFMPEG_HWACCEL=videotoolbox (macOS) once you can A/B it under real load
+// with the machine otherwise idle, or FFMPEG_HWACCEL=vaapi (Linux, needs a
+// real /dev/dri render node — set FFMPEG_HWACCEL_DEVICE to override the
+// default /dev/dri/renderD128) once the target Linux hardware/drivers are
+// known. Unset/invalid values are a no-op (plain software decode, today's
+// behavior).
+function resolveHwaccelArgs() {
+  const mode = process.env.FFMPEG_HWACCEL
+  if (!mode || mode === 'none') return []
+  if (mode === 'vaapi') {
+    const device = process.env.FFMPEG_HWACCEL_DEVICE || '/dev/dri/renderD128'
+    // Deliberately NOT setting -hwaccel_output_format vaapi: that keeps
+    // frames as opaque hardware surfaces, which the existing software
+    // `-vf scale=...` filter downstream can't touch without an explicit
+    // scale_vaapi/hwdownload rework. Omitting it makes ffmpeg decode on the
+    // GPU but auto-copy frames back to system memory, so the rest of the
+    // pipeline (scale/mjpeg encode) keeps working unchanged — less than the
+    // full zero-copy win, but doesn't require hardware I can't test against.
+    return ['-hwaccel', 'vaapi', '-hwaccel_device', device]
+  }
+  return ['-hwaccel', mode]
+}
+const HWACCEL_ARGS = resolveHwaccelArgs()
+if (HWACCEL_ARGS.length) console.log(`  ffmpeg hwaccel: ${process.env.FFMPEG_HWACCEL}`)
+
 // --- Auto network alias setup (macOS only) ---
 // The camera lives on an isolated subnet reachable only via a specific
 // network interface that needs an IP alias on it (see README). This is a
@@ -172,6 +209,7 @@ function getOrStartStream(camera) {
 
   const args = [
     '-loglevel', 'quiet',
+    ...HWACCEL_ARGS, // no-op unless FFMPEG_HWACCEL is set — see resolveHwaccelArgs()
     '-rtsp_transport', 'tcp',
     '-i', camera.rtsp,
     '-vf', 'scale=1280:720',
@@ -850,20 +888,36 @@ app.get('/api/recordings', (_req, res) => {
 })
 
 // Recording metadata — runs ffmpeg to extract real duration (slow, call infrequently)
+// name -> { duration, size } — a finished recording never changes duration,
+// so once probed there's no reason to spawn ffmpeg for it again. Before this
+// cache, every call here re-ran `ffmpeg -i` on EVERY recording file (every
+// 30s, per open tab) with no memoization — cheap with a handful of files,
+// but linear-and-unbounded as the folder grows from motion-detection
+// recordings piling up over time. Keyed on size too: a still-being-recorded
+// file grows, so a cache hit only counts if the size hasn't changed since
+// the last probe (i.e. the file is finalized).
+const recordingMetaCache = new Map()
+
 app.get('/api/recordings/meta', async (_req, res) => {
   const files = readdirSync(RECORDINGS_DIR).filter(f => f.endsWith('.mp4')).sort()
   const meta = await Promise.all(files.map(async name => {
     const file = join(RECORDINGS_DIR, name)
     const { size } = statSync(file)
+    const cached = recordingMetaCache.get(name)
+    if (cached && cached.size === size) return cached
     try {
       // ffmpeg -i exits non-zero but writes file info to stderr
       await execAsync(`"${FFMPEG}" -i "${file}"`, { timeout: 5000 })
-      return { name, duration: 0, size }
+      const result = { name, duration: 0, size }
+      recordingMetaCache.set(name, result)
+      return result
     } catch (e) {
       const stderr = (e && typeof e === 'object' && 'stderr' in e) ? String(e.stderr) : ''
       const m = stderr.match(/Duration: (\d+):(\d+):(\d+)/)
       const duration = m ? parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 + parseInt(m[3]) : 0
-      return { name, duration, size }
+      const result = { name, duration, size }
+      recordingMetaCache.set(name, result)
+      return result
     }
   }))
   res.json(meta)
@@ -897,7 +951,7 @@ app.delete('/api/recordings', (_req, res) => {
     for (const name of readdirSync(RECORDINGS_DIR)) {
       if (!name.endsWith('.mp4')) continue
       if (activeFiles.has(name)) { skipped++; continue }
-      try { unlinkSync(join(RECORDINGS_DIR, name)); deleted++ } catch { skipped++ }
+      try { unlinkSync(join(RECORDINGS_DIR, name)); recordingMetaCache.delete(name); deleted++ } catch { skipped++ }
     }
   } catch {}
   res.json({ ok: true, deleted, skipped })
@@ -913,6 +967,7 @@ app.delete(/^\/api\/recordings\/(.+)$/, (req, res) => {
   if (!existsSync(file)) return res.status(404).json({ error: 'Not found' })
   try {
     unlinkSync(file)
+    recordingMetaCache.delete(filename)
     res.json({ ok: true })
   } catch {
     res.status(500).json({ error: 'Could not delete file' })
