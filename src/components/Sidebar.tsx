@@ -18,11 +18,12 @@ const NAV_ITEMS: NavItem[] = [
 interface Props {
   activeView: string
   alertsBadge?: number
+  recBadge?: number
   onNav: (view: string) => void
   onOpenSettings: () => void
 }
 
-export function Sidebar({ activeView, alertsBadge, onNav, onOpenSettings }: Props) {
+export function Sidebar({ activeView, alertsBadge, recBadge, onNav, onOpenSettings }: Props) {
   return (
     <aside style={{
       width: 84, flexShrink: 0, background: '#0E1012',
@@ -50,7 +51,7 @@ export function Sidebar({ activeView, alertsBadge, onNav, onOpenSettings }: Prop
       <nav style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', width: '100%' }}>
         {NAV_ITEMS.map(({ icon: Icon, label, view }) => {
           const active = activeView === view
-          const badge = view === 'alertas' ? alertsBadge : undefined
+          const badge = view === 'alertas' ? alertsBadge : view === 'rec' ? recBadge : undefined
           return (
             <button
               key={label}

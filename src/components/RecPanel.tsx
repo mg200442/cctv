@@ -4,7 +4,7 @@ import {
   X, Car, UserRound, ShieldAlert, Radar, DoorOpen, VideoOff, Search,
 } from 'lucide-react'
 import type { Recording } from '@/hooks/useCameras'
-import { ALERTS } from '@/data/cameras'
+import type { Alert } from '@/types/camera'
 import { VideoPlayer } from './VideoPlayer'
 
 export type Tab = 'rec' | 'alertas' | 'movimiento'
@@ -28,7 +28,9 @@ function fmtSize(b: number) {
 
 interface Props {
   recordings: Recording[]
+  alerts: Alert[]
   onDeleteRecording: (name: string) => Promise<void>
+  onDeleteAllRecordings: () => Promise<void>
   searchQuery?: string
   tab: Tab
   visibleTabs: Tab[]
@@ -49,10 +51,23 @@ const ICON_MAP: Record<string, React.ElementType> = {
 
 const SEV_ORDER: Record<string, number> = { ALTA: 0, MEDIA: 1, BAJA: 2, INFO: 3 }
 
-export function RecPanel({ recordings, onDeleteRecording, searchQuery = '', tab, visibleTabs, onTabChange }: Props) {
+export function RecPanel({ recordings, alerts, onDeleteRecording, onDeleteAllRecordings, searchQuery = '', tab, visibleTabs, onTabChange }: Props) {
   const [activeRec, setActiveRec] = useState<Recording | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false)
+  const [deletingAll, setDeletingAll] = useState(false)
+
+  async function handleDeleteAll() {
+    setDeletingAll(true)
+    try {
+      await onDeleteAllRecordings()
+      setActiveRec(null)
+    } finally {
+      setDeletingAll(false)
+      setConfirmDeleteAll(false)
+    }
+  }
 
   const q = searchQuery.trim().toLowerCase()
   const visibleRecs = q
@@ -68,11 +83,11 @@ export function RecPanel({ recordings, onDeleteRecording, searchQuery = '', tab,
     return acc
   }, {})
 
-  const motionAlerts = ALERTS.filter(a =>
+  const motionAlerts = alerts.filter(a =>
     a.type.toLowerCase().includes('movimiento') || a.type.toLowerCase().includes('perimetro') || a.type.toLowerCase().includes('persona')
   )
 
-  const sortedAlerts = [...ALERTS].sort((a, b) => (SEV_ORDER[a.sev] ?? 4) - (SEV_ORDER[b.sev] ?? 4))
+  const sortedAlerts = [...alerts].sort((a, b) => (SEV_ORDER[a.sev] ?? 4) - (SEV_ORDER[b.sev] ?? 4))
 
   async function handleDelete(name: string) {
     setDeleting(name)
@@ -85,11 +100,12 @@ export function RecPanel({ recordings, onDeleteRecording, searchQuery = '', tab,
     }
   }
 
-  const TABS: { key: Tab; label: string; icon: React.ElementType; count?: number }[] = [
+  const ALL_TABS: { key: Tab; label: string; icon: React.ElementType; count?: number }[] = [
     { key: 'rec', label: 'GRABACIONES', icon: Clapperboard, count: recordings.length },
-    { key: 'alertas', label: 'ALERTAS', icon: Bell, count: ALERTS.length },
+    { key: 'alertas', label: 'ALERTAS', icon: Bell, count: alerts.length },
     { key: 'movimiento', label: 'MOVIMIENTO', icon: Activity, count: motionAlerts.length },
-  ].filter(t => visibleTabs.includes(t.key))
+  ]
+  const TABS = ALL_TABS.filter(t => visibleTabs.includes(t.key))
 
   return (
     <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -141,6 +157,55 @@ export function RecPanel({ recordings, onDeleteRecording, searchQuery = '', tab,
         {/* ── GRABACIONES ── */}
         {tab === 'rec' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            {recordings.length > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                {confirmDeleteAll ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 10, color: '#FF8079', letterSpacing: '.04em' }}>
+                      ¿Borrar {recordings.length} grabación{recordings.length !== 1 ? 'es' : ''}? No se puede deshacer.
+                    </span>
+                    <button
+                      onClick={handleDeleteAll}
+                      disabled={deletingAll}
+                      style={{
+                        padding: '6px 14px', borderRadius: 8, cursor: 'pointer',
+                        border: '1px solid #FF5247', background: '#1A0E0D',
+                        color: '#FF5247', fontSize: 10, letterSpacing: '.08em',
+                        fontFamily: "'DM Mono',monospace",
+                      }}
+                    >
+                      {deletingAll ? 'BORRANDO…' : 'CONFIRMAR'}
+                    </button>
+                    <button
+                      onClick={() => setConfirmDeleteAll(false)}
+                      disabled={deletingAll}
+                      style={{
+                        padding: '6px 14px', borderRadius: 8, cursor: 'pointer',
+                        border: '1px solid #20242A', background: 'transparent',
+                        color: '#7E858C', fontSize: 10, letterSpacing: '.08em',
+                        fontFamily: "'DM Mono',monospace",
+                      }}
+                    >
+                      CANCELAR
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmDeleteAll(true)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 7,
+                      padding: '7px 14px', borderRadius: 8, cursor: 'pointer',
+                      border: '1px solid #20242A', background: '#0E1012',
+                      color: '#7E858C', fontSize: 10, letterSpacing: '.06em',
+                      fontFamily: "'DM Mono',monospace",
+                    }}
+                  >
+                    <Trash2 size={12} /> BORRAR TODO
+                  </button>
+                )}
+              </div>
+            )}
+
             {q && (
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 7,
@@ -343,7 +408,7 @@ export function RecPanel({ recordings, onDeleteRecording, searchQuery = '', tab,
         {tab === 'alertas' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ fontSize: 9, letterSpacing: '.12em', color: '#7E858C', marginBottom: 6 }}>
-              ÚLTIMAS 24H · {ALERTS.length} EVENTOS
+              ÚLTIMAS 24H · {alerts.length} EVENTOS
             </div>
             {sortedAlerts.map((al, i) => {
               const { color, bg } = TONE_MAP[al.tone]

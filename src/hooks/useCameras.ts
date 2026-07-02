@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { Camera, ServerCamera } from '@/types/camera'
+import type { Camera, ServerCamera, Alert } from '@/types/camera'
 
 const API = ''
 
@@ -76,6 +76,10 @@ export function useCameras() {
   const [recordings, setRecordings] = useState<Recording[]>([])
   const [diskPercent, setDiskPercent] = useState(0)
   const [recordingsSizeBytes, setRecordingsSizeBytes] = useState(0)
+  const [alerts, setAlerts] = useState<Alert[]>([])
+  const [motionActive, setMotionActive] = useState(false)
+  const [networkOk, setNetworkOk] = useState(true)
+  const [repairingNetwork, setRepairingNetwork] = useState(false)
 
   const fetchCameras = useCallback(async () => {
     try {
@@ -130,21 +134,83 @@ export function useCameras() {
     } catch {}
   }, [])
 
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/alerts`)
+      if (!res.ok) return
+      setAlerts(await res.json())
+    } catch {}
+  }, [])
+
+  const fetchMotionStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/motion/status`)
+      if (!res.ok) return
+      const { active } = await res.json()
+      setMotionActive(!!active)
+    } catch {}
+  }, [])
+
+  const fetchNetworkStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/network/status`)
+      if (!res.ok) return
+      const { active } = await res.json()
+      setNetworkOk(!!active)
+    } catch {}
+  }, [])
+
+  const repairNetwork = useCallback(async () => {
+    setRepairingNetwork(true)
+    try {
+      const res = await fetch(`${API}/api/network/repair`, { method: 'POST' })
+      const data = await res.json()
+      setNetworkOk(!!data.active)
+      await fetchCameras()
+    } finally {
+      setRepairingNetwork(false)
+    }
+  }, [fetchCameras])
+
   useEffect(() => {
     fetchCameras()
     fetchRecordings()
     fetchStats()
     fetchMeta()
-    const fast = setInterval(() => { fetchCameras(); fetchRecordings() }, 5000)
-    const slow = setInterval(() => { fetchMeta(); fetchStats() }, 30000)
+    fetchAlerts()
+    fetchMotionStatus()
+    fetchNetworkStatus()
+    const fast = setInterval(() => { fetchCameras(); fetchRecordings(); fetchAlerts(); fetchMotionStatus() }, 5000)
+    // Network alias state only changes on Mac reboot/logout — no need to
+    // check it as often as camera state, so it rides the slow interval
+    // instead of piling another request onto every 5s tick.
+    const slow = setInterval(() => { fetchMeta(); fetchStats(); fetchNetworkStatus() }, 30000)
     return () => { clearInterval(fast); clearInterval(slow) }
-  }, [fetchCameras, fetchRecordings, fetchMeta, fetchStats])
+  }, [fetchCameras, fetchRecordings, fetchMeta, fetchStats, fetchAlerts, fetchMotionStatus, fetchNetworkStatus])
 
   const renameCamera = useCallback(async (id: string, label: string, zone: string) => {
     await fetch(`${API}/api/cameras/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ label, zone }),
+    })
+    await fetchCameras()
+  }, [fetchCameras])
+
+  const toggleCameraEnabled = useCallback(async (id: string, enabled: boolean) => {
+    await fetch(`${API}/api/cameras/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    })
+    await fetchCameras()
+  }, [fetchCameras])
+
+  const toggleCameraMotion = useCallback(async (id: string, motionEnabled: boolean) => {
+    await fetch(`${API}/api/cameras/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motionEnabled }),
     })
     await fetchCameras()
   }, [fetchCameras])
@@ -186,11 +252,30 @@ export function useCameras() {
     await fetchRecordings()
   }, [fetchRecordings])
 
+  const deleteAllRecordings = useCallback(async () => {
+    const res = await fetch(`${API}/api/recordings`, { method: 'DELETE' })
+    if (!res.ok) throw new Error('Failed to delete recordings')
+    await fetchRecordings()
+  }, [fetchRecordings])
+
+  const startMotion = useCallback(async () => {
+    await fetch(`${API}/api/motion/start`, { method: 'POST' })
+    await fetchMotionStatus()
+  }, [fetchMotionStatus])
+
+  const stopMotion = useCallback(async () => {
+    await fetch(`${API}/api/motion/stop`, { method: 'POST' })
+    await fetchMotionStatus()
+    await fetchCameras() // per-camera motionActive flags clear immediately server-side
+  }, [fetchMotionStatus, fetchCameras])
+
   return {
     cameras, selected, setSelected,
     loading, serverOk, recordings, diskPercent, recordingsSizeBytes,
-    addCamera, renameCamera, removeCamera,
+    alerts, motionActive, startMotion, stopMotion,
+    networkOk, repairingNetwork, repairNetwork,
+    addCamera, renameCamera, removeCamera, toggleCameraEnabled, toggleCameraMotion,
     startRecording, stopRecording,
-    snapshotUrl, fetchRecordings, deleteRecording,
+    snapshotUrl, fetchRecordings, deleteRecording, deleteAllRecordings,
   }
 }

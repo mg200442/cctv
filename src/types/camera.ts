@@ -16,8 +16,11 @@ export interface ServerCamera {
   zone: string
   rtsp: string
   enabled: boolean
+  motionEnabled?: boolean
   streaming: boolean
+  live: boolean
   recording: boolean
+  motionActive: boolean
 }
 
 // Extended camera for the UI grid (includes demo metadata)
@@ -30,18 +33,15 @@ export interface Camera extends ServerCamera {
 }
 
 export interface Alert {
+  id: string
+  cameraId: string
   time: string
+  ts: string // full ISO timestamp — used for accurate timeline positioning across day boundaries
   cam: string
   zone: string
   type: string
   sev: string
   icon: string
   tone: 'red' | 'amber' | 'cyan' | 'green'
-}
-
-export interface Device {
-  id: string
-  zone: string
-  on: boolean
-  status: string
+  recording?: string // filename of the recording that captured this alert, if any
 }

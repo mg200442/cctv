@@ -2,12 +2,14 @@ import express from 'express'
 import cors from 'cors'
 import { spawn, execSync, exec } from 'child_process'
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync, statSync } from 'fs'
-import { join, dirname } from 'path'
+import { join, dirname, basename } from 'path'
 import { fileURLToPath } from 'url'
 import { promisify } from 'util'
 import net from 'net'
 import os from 'os'
 import ffmpegStatic from 'ffmpeg-static'
+import jpeg from 'jpeg-js'
+import * as tf from '@tensorflow/tfjs'
 
 const execAsync = promisify(exec)
 
@@ -16,6 +18,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 3001
 const RECORDINGS_DIR = join(__dirname, 'recordings')
 const CONFIG_FILE = join(__dirname, 'cameras.json')
+const ALERTS_FILE = join(__dirname, 'alerts.json')
 
 mkdirSync(RECORDINGS_DIR, { recursive: true })
 
@@ -53,39 +56,66 @@ console.log(`  ffmpeg: ${FFMPEG}`)
 const NET_IFACE = process.env.CCTV_NET_IFACE || 'en0'
 const NET_ALIASES = (process.env.CCTV_NET_ALIASES || '192.168.138.100,192.168.138.1').split(',')
 
-function setupNetworkAliases() {
+// Read-only check — no side effects, safe to call from a status-polling
+// endpoint. Uses execAsync (not execSync): this is hit every ~20s by every
+// open dashboard tab, and a blocking child-process spawn on that cadence was
+// stalling the whole Node event loop long enough to visibly delay unrelated
+// requests (e.g. PATCH /api/cameras/:id for pausing a camera) — confirmed as
+// the cause of "pausar todo doesn't pause anything" / "pausing one camera
+// takes forever" reports.
+async function isNetworkAliasActive() {
+  if (process.platform !== 'darwin') return true // not our problem to detect on Linux
+  try {
+    const { stdout } = await execAsync(`ifconfig ${NET_IFACE} 2>/dev/null`)
+    return stdout.includes(NET_ALIASES[0])
+  } catch {
+    return false
+  }
+}
+
+// Returns { ok, message } instead of throwing — callable both at startup and
+// on-demand from POST /api/network/repair (the dashboard "Reparar red" button).
+// Uses execAsync (not execSync) so a pending admin-password GUI prompt (up to
+// 30s) doesn't block the Node event loop — the server keeps serving snapshots
+// while it waits.
+async function setupNetworkAliases() {
   if (process.env.CCTV_SKIP_NET_SETUP === '1') {
-    console.log('  Network alias setup skipped (CCTV_SKIP_NET_SETUP=1)')
-    return
+    const message = 'Network alias setup skipped (CCTV_SKIP_NET_SETUP=1)'
+    console.log(`  ${message}`)
+    return { ok: true, skipped: true, message }
   }
   if (process.platform !== 'darwin') {
-    console.log(`  Network alias setup skipped (only implemented for macOS). If the camera is on an isolated subnet, configure it manually, e.g.: sudo ip addr add ${NET_ALIASES[0]}/24 dev <iface>`)
-    return
+    const message = `Network alias setup skipped (only implemented for macOS). If the camera is on an isolated subnet, configure it manually, e.g.: sudo ip addr add ${NET_ALIASES[0]}/24 dev <iface>`
+    console.log(`  ${message}`)
+    return { ok: true, skipped: true, message }
   }
   try {
-    const ifaces = execSync(`ifconfig ${NET_IFACE} 2>/dev/null`).toString()
-    if (ifaces.includes(NET_ALIASES[0])) {
+    if (await isNetworkAliasActive()) {
       console.log('  ✓ Network aliases already active')
-      return
+      return { ok: true, message: 'Alias de red ya activo' }
     }
     const ALIAS_CMD = NET_ALIASES.map(ip => `ifconfig ${NET_IFACE} alias ${ip} netmask 255.255.255.0`).join(' && ')
     try {
-      execSync(`sudo -n sh -c '${ALIAS_CMD}'`, { timeout: 5000, stdio: 'pipe' })
+      await execAsync(`sudo -n sh -c '${ALIAS_CMD}'`, { timeout: 5000 })
       console.log('  ✓ Network aliases set (sudo)')
+      return { ok: true, message: 'Alias de red configurado (sudo)' }
     } catch {
       console.log('  Setting up camera subnet aliases (one-time admin prompt)…')
-      execSync(
+      await execAsync(
         `osascript -e 'do shell script "${ALIAS_CMD}" with administrator privileges'`,
         { timeout: 30000 }
       )
       console.log('  ✓ Network aliases set')
+      return { ok: true, message: 'Alias de red configurado' }
     }
   } catch (e) {
-    console.log('  ✗ Network alias setup skipped (camera may be unreachable)')
+    const message = 'Network alias setup failed (camera may be unreachable)'
+    console.log(`  ✗ ${message}`)
+    return { ok: false, message }
   }
 }
 
-setupNetworkAliases()
+await setupNetworkAliases()
 
 // --- Camera config persistence ---
 function loadConfig() {
@@ -106,8 +136,28 @@ function saveConfig(cameras) {
   writeFileSync(CONFIG_FILE, JSON.stringify(cameras, null, 2))
 }
 
+// --- Alerts persistence (real motion-detection events) ---
+const MAX_ALERTS = 200 // cap so the file doesn't grow unbounded
+
+function loadAlerts() {
+  if (!existsSync(ALERTS_FILE)) return []
+  try {
+    return JSON.parse(readFileSync(ALERTS_FILE, 'utf8'))
+  } catch {
+    return []
+  }
+}
+
+function addAlert(alert) {
+  const alerts = loadAlerts()
+  alerts.unshift(alert) // newest first
+  if (alerts.length > MAX_ALERTS) alerts.length = MAX_ALERTS
+  writeFileSync(ALERTS_FILE, JSON.stringify(alerts, null, 2))
+  return alerts
+}
+
 // --- Active stream processes ---
-// entry: { proc, clients, latestFrame, lastFrameTime }
+// entry: { proc, clients, latestFrame, lastFrameTime, lastRequestTime }
 const streams = new Map()
 const recordings = new Map()
 
@@ -116,7 +166,7 @@ const STALE_FRAME_MS = 3000  // serve 503 if last frame is older than this
 function getOrStartStream(camera) {
   if (streams.has(camera.id)) return streams.get(camera.id)
 
-  const entry = { proc: null, clients: new Set(), latestFrame: null, lastFrameTime: 0 }
+  const entry = { proc: null, clients: new Set(), latestFrame: null, lastFrameTime: 0, lastRequestTime: Date.now(), startedAt: Date.now() }
 
   const args = [
     '-loglevel', 'quiet',
@@ -189,19 +239,332 @@ function stopStream(id) {
   streams.delete(id)
 }
 
+// --- Idle stream sweep ---
+// /snapshot/:id (what every dashboard tile actually uses, via SnapshotStream.tsx
+// polling every 150ms) starts ffmpeg via getOrStartStream() but never stopped
+// it — unlike /stream/:id, which has its own 5s-after-last-client grace stop.
+// Without this sweep, an ffmpeg process stays resident forever once any tile
+// has loaded once, even with the dashboard tab closed. getOrStartStream()
+// already restarts transparently on the next request, so stopping here is
+// invisible to anyone actively viewing — it only reclaims CPU from cameras
+// nobody is polling anymore.
+const IDLE_SWEEP_INTERVAL_MS = 20_000
+const IDLE_STOP_MS = 45_000
+
+setInterval(() => {
+  const now = Date.now()
+  for (const [id, entry] of streams) {
+    if (entry.clients.size > 0) continue // active /stream (MJPEG) client — never idle-stop
+    if (now - entry.lastRequestTime < IDLE_STOP_MS) continue // requested recently — still in use
+    console.log(`  Idle sweep: stopping ${id} (no requests for >${IDLE_STOP_MS}ms)`)
+    stopStream(id)
+  }
+}, IDLE_SWEEP_INTERVAL_MS)
+
+// --- Motion detection ---
+// Frame-differencing motion detector (not object classification — that's a
+// planned follow-up). Reuses the same ffmpeg pipe already kept alive for the
+// live-view snapshot feature (getOrStartStream): each tick grabs the camera's
+// latestFrame, downscales it to a tiny grayscale image in plain JS (the full
+// 1280x720 frame is FAR too slow to run through tfjs's pure-JS backend on
+// this machine — measured ~6s per op — so we shrink it with a manual pixel
+// loop first, then hand the already-tiny array to tf.js for the actual diff/
+// threshold math), and compares it against the previous tick's frame.
+//
+// False-positive mitigations (this was explicitly requested — cheap camera
+// sensors + JPEG compression both add noise that a naive per-pixel diff
+// would misread as motion):
+//   1. Downscale to MOTION_W x MOTION_H grayscale before comparing — this
+//      alone smooths out single-pixel sensor noise and compression blocking.
+//   2. Per-pixel threshold (MOTION_DIFF_THRESHOLD) — ignores subtle lighting
+//      drift/flicker that changes every pixel a little without anything
+//      actually moving.
+//   3. Percentage-of-changed-pixels threshold (MOTION_PCT_THRESHOLD) —
+//      requires a meaningfully-sized change (like a person), not a small
+//      noisy blob.
+//   4. Tile-based spatial check (see analyzeMotion) — distinguishes a global
+//      scene event (exposure/IR flicker changes EVERY tile) from real
+//      motion (changes some tiles, leaves others — background — alone),
+//      regardless of the overall %. A person standing close to the camera
+//      can legitimately change 50%+ of the frame; a blunt percentage
+//      ceiling was rejecting that as "not motion" (reported by the user:
+//      standing in front of cam-01 didn't reliably alert).
+//   5. Per-camera cooldown (MOTION_COOLDOWN_MS) — one alert per motion
+//      "event", not a new alert every tick while someone's still in frame.
+const MOTION_W = 96
+const MOTION_H = 54
+const MOTION_CHECK_INTERVAL_MS = 1500
+const MOTION_DIFF_THRESHOLD = 25      // 0-255 grayscale levels
+const MOTION_PCT_THRESHOLD = 1.5      // % of pixels that must exceed the diff threshold
+// Spatial grid used to tell "something moved in part of the frame" apart
+// from "the whole frame changed together" (lighting/IR flicker), regardless
+// of how large the moving thing is. MOTION_H/TILES_Y and MOTION_W/TILES_X
+// must divide evenly (54/3=18, 96/4=24).
+const TILES_X = 4
+const TILES_Y = 3
+const TILE_HOT_PCT = 12          // a tile counts as "hot" if >=this % of its pixels changed
+const GLOBAL_HOT_TILE_RATIO = 0.85 // >=85% of tiles hot at once = global change, not localized motion
+const MOTION_STREAK_REQUIRED = 1      // ticks over threshold before alerting (cooldown prevents spam)
+const MOTION_COOLDOWN_MS = 60_000     // min gap between alerts for the same camera
+const MOTION_ACTIVE_DECAY_MS = 5_000  // how long the "motion active" UI flag lingers after the streak drops
+// A freshly-(re)started ffmpeg pipe often needs a moment before the camera's
+// auto-exposure/white-balance settles — comparing frames during that window
+// reads as "motion" even though nothing moved. Skip comparisons (but keep
+// updating the baseline) until the stream has been running this long.
+const STREAM_WARMUP_MS = 4_000
+
+let motionActive = false
+const motionTimers = new Map()  // cameraId -> setTimeout handle (one independent loop per camera)
+const motionState = new Map()   // cameraId -> boolean (for the UI: is motion happening right now)
+const motionTrack = new Map()   // cameraId -> { prevGray, streak, lastAlertTime, lastMotionTime }
+const motionRecordTimers = new Map() // cameraId -> setTimeout handle for auto-record-stop
+
+// Decode a JPEG buffer straight to a tiny grayscale Float32Array, skipping
+// tfjs entirely for this part — plain typed-array math is what's actually
+// fast here (see comment above).
+//
+// Downscales by AVERAGING each source block, not nearest-neighbor sampling.
+// This matters a lot in practice: nearest-neighbor picks one raw pixel per
+// output pixel, which keeps 100% of per-pixel sensor noise intact — and
+// these cameras are noisy at night (IR/low-light grain). Measured live: a
+// fully static night scene read as ~58% of pixels "changed" with
+// nearest-neighbor sampling, because the noise survived the downscale.
+// Block-averaging smooths that random per-pixel noise out while still
+// preserving real, spatially-coherent motion (an object moving affects a
+// whole neighborhood of pixels together, so it survives averaging).
+function decodeGraySmall(jpegBuffer) {
+  let decoded
+  try {
+    decoded = jpeg.decode(jpegBuffer, { useTArray: true })
+  } catch {
+    return null
+  }
+  const { width, height, data } = decoded
+  const out = new Float32Array(MOTION_W * MOTION_H)
+  const blockW = width / MOTION_W
+  const blockH = height / MOTION_H
+  for (let y = 0; y < MOTION_H; y++) {
+    const y0 = Math.floor(y * blockH)
+    const y1 = Math.max(y0 + 1, Math.floor((y + 1) * blockH))
+    for (let x = 0; x < MOTION_W; x++) {
+      const x0 = Math.floor(x * blockW)
+      const x1 = Math.max(x0 + 1, Math.floor((x + 1) * blockW))
+      let sum = 0
+      let count = 0
+      for (let sy = y0; sy < y1; sy++) {
+        let rowIdx = (sy * width + x0) * 4
+        for (let sx = x0; sx < x1; sx++) {
+          sum += 0.299 * data[rowIdx] + 0.587 * data[rowIdx + 1] + 0.114 * data[rowIdx + 2]
+          rowIdx += 4
+          count++
+        }
+      }
+      out[y * MOTION_W + x] = sum / count
+    }
+  }
+  return out
+}
+
+// tf.js does the actual comparison — this is the part that's genuinely fast
+// once the inputs are already tiny. Returns both the overall changed-pixel
+// percentage AND the tile hot-ratio used to tell localized motion apart
+// from a uniform global scene change (see comment block above).
+function analyzeMotion(prevGray, currGray) {
+  return tf.tidy(() => {
+    const a = tf.tensor(prevGray, [MOTION_H, MOTION_W])
+    const b = tf.tensor(currGray, [MOTION_H, MOTION_W])
+    const changed = tf.sub(a, b).abs().greater(MOTION_DIFF_THRESHOLD).toFloat()
+    const pct = changed.mean().dataSync()[0] * 100
+    const tileMeans = changed
+      .reshape([TILES_Y, MOTION_H / TILES_Y, TILES_X, MOTION_W / TILES_X])
+      .mean([1, 3])
+      .dataSync()
+    let hotTiles = 0
+    for (let i = 0; i < tileMeans.length; i++) {
+      if (tileMeans[i] * 100 >= TILE_HOT_PCT) hotTiles++
+    }
+    return { pct, hotRatio: hotTiles / tileMeans.length }
+  })
+}
+
+// One independent tick for a single camera — pulled out of the old shared
+// loop so a slow camera can't delay how often another camera gets checked
+// (measured: block-averaged decoding takes ~450-900ms per camera; with 3
+// cameras sharing one serial loop, a given camera was only actually being
+// re-checked every ~3-4s despite the "1.5s" interval, which was part of why
+// real motion in front of a camera wasn't always caught in time).
+async function motionTickForCamera(camera) {
+  const entry = getOrStartStream(camera)
+  const now = Date.now()
+  entry.lastRequestTime = now // keep the stream alive while we're watching it
+
+  if (!motionTrack.has(camera.id)) {
+    motionTrack.set(camera.id, { prevGray: null, streak: 0, lastAlertTime: 0, lastMotionTime: 0 })
+  }
+  const track = motionTrack.get(camera.id)
+
+  const hasFreshFrame = entry.latestFrame && (now - entry.lastFrameTime) < STALE_FRAME_MS
+  const isWarm = (now - entry.startedAt) >= STREAM_WARMUP_MS
+  if (!hasFreshFrame) return
+
+  const gray = decodeGraySmall(entry.latestFrame)
+  if (gray && track.prevGray && isWarm) {
+    const { pct, hotRatio } = analyzeMotion(track.prevGray, gray)
+    if (hotRatio >= GLOBAL_HOT_TILE_RATIO) {
+      // Change is spread across nearly every tile — a global scene event
+      // (exposure/IR flicker), not an object moving through part of the
+      // frame. Confirmed via direct frame inspection this really happens on
+      // some cameras. Accept as new baseline below, don't count as motion.
+      if (now - (track.lastSceneResetLog || 0) > 30_000) {
+        console.log(`  Motion: scene reset for ${camera.id} (${pct.toFixed(1)}% changed, ${(hotRatio * 100).toFixed(0)}% of tiles — treated as non-motion global change, e.g. exposure/IR flicker)`)
+        track.lastSceneResetLog = now
+      }
+      track.streak = 0
+    } else if (pct > MOTION_PCT_THRESHOLD) {
+      track.streak++
+    } else {
+      track.streak = 0
+    }
+
+    if (track.streak >= MOTION_STREAK_REQUIRED) {
+      motionState.set(camera.id, true)
+      track.lastMotionTime = now
+      if (now - track.lastAlertTime > MOTION_COOLDOWN_MS) {
+        track.lastAlertTime = now
+        const d = new Date()
+        const pad2 = n => String(n).padStart(2, '0')
+        const recordingFile = autoRecordOnMotion(camera)
+        addAlert({
+          id: `${camera.id}_${d.getTime()}`,
+          cameraId: camera.id,
+          time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`,
+          ts: d.toISOString(),
+          cam: camera.label,
+          zone: camera.zone,
+          type: 'Movimiento detectado',
+          sev: 'BAJA',
+          icon: 'radar',
+          tone: 'cyan',
+          recording: recordingFile,
+        })
+        console.log(`  Motion: alert for ${camera.id} (${pct.toFixed(1)}% changed)`)
+      }
+    } else if (now - track.lastMotionTime > MOTION_ACTIVE_DECAY_MS) {
+      motionState.set(camera.id, false)
+    }
+  }
+  if (gray) track.prevGray = gray
+}
+
+// Self-rescheduling per-camera loop instead of setInterval: block-averaged
+// decoding takes ~450-900ms, so a fixed setInterval could fire the next
+// round before the current one finishes. Scheduling the next tick only
+// after the current one resolves guarantees a camera's own ticks never
+// overlap, without being held up by any other camera's processing time.
+// `motionEnabled` defaults to true (absent = on) so existing cameras.json
+// entries from before this per-camera toggle existed keep working unchanged.
+// Deliberately does NOT require `camera.enabled`: "enabled" only controls
+// whether the dashboard shows a live view for that camera (paused = save
+// browser-side polling/rendering) — motion detection is independent of that
+// and keeps running server-side even while a camera is paused, per explicit
+// request (a paused camera still needs its ffmpeg stream alive for this).
+function isMotionEligible(camera) {
+  return !!camera && camera.motionEnabled !== false
+}
+
+// A camera's ffmpeg stream needs to stay alive if the dashboard is showing
+// its live view OR motion detection is actively watching it — used to
+// decide whether pausing a camera (or disabling its motion toggle) can
+// actually free the CPU, versus the other consumer still needing the feed.
+function streamStillNeeded(camera) {
+  return camera.enabled || (motionActive && isMotionEligible(camera))
+}
+
+async function runCameraMotionLoop(cameraId) {
+  if (!motionActive) { motionTimers.delete(cameraId); return }
+  const camera = loadConfig().find(c => c.id === cameraId)
+  if (!isMotionEligible(camera)) { motionTimers.delete(cameraId); motionState.delete(cameraId); return } // removed/disabled/excluded since detection started
+  try {
+    await motionTickForCamera(camera)
+  } catch (e) {
+    console.error(`  Motion tick error for ${cameraId}:`, e.message)
+  }
+  if (motionActive) {
+    motionTimers.set(cameraId, setTimeout(() => runCameraMotionLoop(cameraId), MOTION_CHECK_INTERVAL_MS))
+  } else {
+    motionTimers.delete(cameraId)
+  }
+}
+
+function startMotionDetection() {
+  if (motionActive) return
+  motionActive = true
+  motionTrack.clear()   // fresh baseline — don't compare against a stale frame from last time
+  motionState.clear()
+  const cameras = loadConfig().filter(isMotionEligible)
+  for (const camera of cameras) runCameraMotionLoop(camera.id)
+  console.log(`  Motion detection: started (${cameras.length} camera(s))`)
+}
+
+function stopMotionDetection() {
+  motionActive = false
+  for (const timer of motionTimers.values()) clearTimeout(timer)
+  motionTimers.clear()
+  motionState.clear()
+  console.log('  Motion detection: stopped')
+}
+
+// Called from PATCH /api/cameras/:id whenever `enabled` or `motionEnabled`
+// changes, so flipping a per-camera switch takes effect immediately instead
+// of only on the next global start/stop — lets the dashboard offer
+// individual per-camera motion control alongside the existing global toggle.
+function syncCameraMotionLoop(camera) {
+  if (!motionActive) return
+  if (isMotionEligible(camera)) {
+    if (!motionTimers.has(camera.id)) runCameraMotionLoop(camera.id)
+  } else {
+    const timer = motionTimers.get(camera.id)
+    if (timer) clearTimeout(timer)
+    motionTimers.delete(camera.id)
+    motionState.delete(camera.id)
+  }
+}
+
 // --- App ---
 const app = express()
 app.use(cors())
 app.use(express.json())
 
+// Camera-subnet network alias status/repair — lets the dashboard fix the
+// "aliases lost on reboot/logout" issue (see CLAUDE.md) with a button instead
+// of a terminal/AI session.
+app.get('/api/network/status', async (_req, res) => {
+  res.json({ active: await isNetworkAliasActive(), platform: process.platform })
+})
+
+app.post('/api/network/repair', async (_req, res) => {
+  const result = await setupNetworkAliases()
+  res.json({ ...result, active: await isNetworkAliasActive() })
+})
+
 // List cameras
 app.get('/api/cameras', (_req, res) => {
   const cameras = loadConfig()
-  const withStatus = cameras.map(c => ({
-    ...c,
-    streaming: streams.has(c.id),
-    recording: recordings.has(c.id),
-  }))
+  const now = Date.now()
+  const withStatus = cameras.map(c => {
+    const entry = streams.get(c.id)
+    // "live" = actually delivering fresh frames right now, not just "not
+    // paused" — a camera can be enabled but unreachable (network alias down,
+    // camera off, RTSP timeout) with no active/fresh stream.
+    const live = !!entry && !!entry.latestFrame && (now - entry.lastFrameTime) < STALE_FRAME_MS
+    return {
+      ...c,
+      streaming: !!entry,
+      live,
+      recording: recordings.has(c.id),
+      motionActive: motionState.get(c.id) ?? false,
+    }
+  })
   res.json(withStatus)
 })
 
@@ -231,13 +594,25 @@ app.post('/api/cameras', (req, res) => {
 
 // Rename / update camera label & zone
 app.patch('/api/cameras/:id', (req, res) => {
-  const { label, zone } = req.body
+  const { label, zone, enabled, motionEnabled } = req.body
   const cameras = loadConfig()
   const cam = cameras.find(c => c.id === req.params.id)
   if (!cam) return res.status(404).json({ error: 'Not found' })
   if (label) cam.label = label.trim()
   if (zone !== undefined) cam.zone = zone.trim()
+  if (typeof enabled === 'boolean') cam.enabled = enabled
+  if (typeof motionEnabled === 'boolean') cam.motionEnabled = motionEnabled
   saveConfig(cameras)
+  if (typeof enabled === 'boolean' || typeof motionEnabled === 'boolean') {
+    // Free CPU immediately when nothing needs this camera's stream anymore
+    // — don't wait for the idle sweep, which is for "nobody has the
+    // dashboard open", not "open but paused on purpose". But don't kill it
+    // just because the dashboard paused it if motion detection is still
+    // watching this camera — pausing only means "no live view", not "stop
+    // detecting motion" (that's the separate per-camera motion toggle).
+    if (!streamStillNeeded(cam)) stopStream(cam.id)
+    syncCameraMotionLoop(cam)
+  }
   res.json(cam)
 })
 
@@ -262,6 +637,7 @@ app.get('/stream/:id', (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*')
 
   const entry = getOrStartStream(camera)
+  entry.lastRequestTime = Date.now()
   entry.clients.add(res)
 
   req.on('close', () => {
@@ -281,6 +657,7 @@ app.get('/snapshot/:id', (req, res) => {
   if (!camera.enabled) return res.status(503).send('Camera disabled')
 
   const entry = getOrStartStream(camera)
+  entry.lastRequestTime = Date.now()
 
   // If we have a frame, return it — but only if it's fresh (camera still connected)
   if (entry.latestFrame) {
@@ -316,12 +693,12 @@ app.get('/snapshot/:id', (req, res) => {
   }, 50)
 })
 
-// Start recording
-app.post('/api/cameras/:id/record/start', (req, res) => {
-  const cameras = loadConfig()
-  const camera = cameras.find(c => c.id === req.params.id)
-  if (!camera) return res.status(404).json({ error: 'Camera not found' })
-  if (recordings.has(camera.id)) return res.json({ ok: true, file: recordings.get(camera.id).file })
+// Start recording for a camera. `auto: true` marks it as motion-triggered,
+// so the auto-record-stop timer (see autoRecordOnMotion) knows it's allowed
+// to stop this one later — a manually-started recording (auto: false) is
+// never touched by the motion system.
+function startRecordingForCamera(camera, { auto = false } = {}) {
+  if (recordings.has(camera.id)) return recordings.get(camera.id).file
 
   const d = new Date()
   const pad = n => String(n).padStart(2, '0')
@@ -332,14 +709,33 @@ app.post('/api/cameras/:id/record/start', (req, res) => {
     '-loglevel', 'quiet',
     '-rtsp_transport', 'tcp',
     '-i', camera.rtsp,
-    '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+    // Stream-copy the VIDEO (remux, no decode/encode) — the camera's native
+    // H.265 written straight into the MP4 container. Recording used to
+    // re-encode to H.264 via libx264, which doubled CPU cost on top of the
+    // live-view transcode while REC was on. HEVC-in-MP4 plays natively in
+    // Safari (this project's primary target); Chrome/Firefox HEVC support
+    // is inconsistent — accepted tradeoff, see CLAUDE.md.
+    // Audio still gets a cheap transcode to AAC: the camera sends PCM A-law,
+    // which MP4's muxer rejects outright with `-c copy` ("codec not
+    // currently supported in container") — confirmed by testing. Audio
+    // encode is computationally trivial next to video, so this keeps
+    // ~all the CPU win while avoiding a broken/empty output file.
+    '-c:v', 'copy',
+    // The camera's raw HEVC bitstream gets muxed with the `hev1` fourcc by
+    // default (parameter sets in-band). Safari's native <video> playback of
+    // HEVC-in-MP4 is unreliable with `hev1` — confirmed: recordings decoded
+    // cleanly with ffmpeg but Safari showed a "can't play" icon and refused
+    // to load them. Forcing the `hvc1` tag (parameter sets in the hvcC box,
+    // Apple's preferred variant) fixes Safari playback — this only rewrites
+    // container-level metadata, still zero-decode stream copy, no CPU cost.
+    '-tag:v', 'hvc1',
     '-c:a', 'aac',
     '-movflags', '+faststart',
     file,
   ]
 
   const proc = spawn(FFMPEG, args)
-  recordings.set(camera.id, { proc, file })
+  recordings.set(camera.id, { proc, file, auto })
 
   proc.on('error', (err) => {
     console.error(`  ✗ ffmpeg recording failed to start for ${camera.id}:`, err.message)
@@ -347,16 +743,65 @@ app.post('/api/cameras/:id/record/start', (req, res) => {
   })
   proc.on('close', () => recordings.delete(camera.id))
 
+  return file
+}
+
+function stopRecordingForCamera(id) {
+  const rec = recordings.get(id)
+  if (!rec) return null
+  try { rec.proc.kill('SIGINT') } catch (_) {} // SIGINT triggers clean finalization
+  setTimeout(() => recordings.delete(id), 2000)
+  return rec.file
+}
+
+// Called right after a motion alert fires. Starts a recording if the camera
+// isn't already recording, or — if it's already auto-recording — extends
+// the auto-stop window instead of letting it end: "record 20s, and if more
+// alerts fire during that time, keep recording" (as requested), by just
+// pushing the stop-timer back out each time a new alert comes in. A
+// manually-started recording (REC button) is left completely alone.
+const MOTION_RECORD_DURATION_MS = 20_000
+
+// Returns the filename (not full path) of whatever recording is now covering
+// this motion event, so the caller can stamp it onto the alert — lets the
+// dashboard link straight from "ALERTAS EN VIVO" to the clip that captured it.
+function autoRecordOnMotion(camera) {
+  const active = recordings.get(camera.id)
+  if (active && !active.auto) return basename(active.file) // manual recording — don't touch it, but it's still covering this moment
+
+  if (!active) {
+    startRecordingForCamera(camera, { auto: true })
+    console.log(`  Motion: auto-recording started for ${camera.id} (${MOTION_RECORD_DURATION_MS / 1000}s, extends on repeat alerts)`)
+  }
+
+  if (motionRecordTimers.has(camera.id)) clearTimeout(motionRecordTimers.get(camera.id))
+  motionRecordTimers.set(camera.id, setTimeout(() => {
+    stopRecordingForCamera(camera.id)
+    motionRecordTimers.delete(camera.id)
+    console.log(`  Motion: auto-recording stopped for ${camera.id} (${MOTION_RECORD_DURATION_MS / 1000}s since last alert)`)
+  }, MOTION_RECORD_DURATION_MS))
+
+  return basename(recordings.get(camera.id).file)
+}
+
+// Start recording
+app.post('/api/cameras/:id/record/start', (req, res) => {
+  const camera = loadConfig().find(c => c.id === req.params.id)
+  if (!camera) return res.status(404).json({ error: 'Camera not found' })
+  const file = startRecordingForCamera(camera)
   res.json({ ok: true, file })
 })
 
 // Stop recording
 app.post('/api/cameras/:id/record/stop', (req, res) => {
-  const rec = recordings.get(req.params.id)
-  if (!rec) return res.json({ ok: true })
-  try { rec.proc.kill('SIGINT') } catch (_) {} // SIGINT triggers clean finalization
-  setTimeout(() => recordings.delete(req.params.id), 2000)
-  res.json({ ok: true, file: rec.file })
+  // A manual stop always wins, even over an auto-recording — cancel any
+  // pending auto-stop timer so it doesn't try to act on an already-gone process.
+  if (motionRecordTimers.has(req.params.id)) {
+    clearTimeout(motionRecordTimers.get(req.params.id))
+    motionRecordTimers.delete(req.params.id)
+  }
+  const file = stopRecordingForCamera(req.params.id)
+  res.json({ ok: true, file: file ?? undefined })
 })
 
 // List recordings (includes file size)
@@ -413,6 +858,22 @@ app.get('/api/stats', (_req, res) => {
   res.json({ diskPercent, recordingsTotalBytes })
 })
 
+// Delete ALL recording files at once. Skips any file a recording is
+// currently writing to (manual REC or motion auto-record) — deleting out
+// from under a live ffmpeg process would corrupt that in-progress file.
+app.delete('/api/recordings', (_req, res) => {
+  const activeFiles = new Set([...recordings.values()].map(r => basename(r.file)))
+  let deleted = 0, skipped = 0
+  try {
+    for (const name of readdirSync(RECORDINGS_DIR)) {
+      if (!name.endsWith('.mp4')) continue
+      if (activeFiles.has(name)) { skipped++; continue }
+      try { unlinkSync(join(RECORDINGS_DIR, name)); deleted++ } catch { skipped++ }
+    }
+  } catch {}
+  res.json({ ok: true, deleted, skipped })
+})
+
 // Delete recording file (regex route avoids Express 5 dot-matching issue in :param)
 app.delete(/^\/api\/recordings\/(.+)$/, (req, res) => {
   const filename = decodeURIComponent(req.params[0])
@@ -434,6 +895,33 @@ app.get('/recordings/:file', (req, res) => {
   const file = join(RECORDINGS_DIR, req.params.file)
   if (!existsSync(file)) return res.status(404).send('Not found')
   res.sendFile(file)
+})
+
+// ─── Alerts (real, generated by motion detection) ───────────────────────────────
+
+app.get('/api/alerts', (_req, res) => {
+  res.json(loadAlerts())
+})
+
+app.delete('/api/alerts', (_req, res) => {
+  writeFileSync(ALERTS_FILE, JSON.stringify([], null, 2))
+  res.json({ ok: true })
+})
+
+// ─── Motion detection ────────────────────────────────────────────────────────────
+
+app.get('/api/motion/status', (_req, res) => {
+  res.json({ active: motionActive, cameras: Object.fromEntries(motionState) })
+})
+
+app.post('/api/motion/start', (_req, res) => {
+  startMotionDetection()
+  res.json({ ok: true, active: motionActive })
+})
+
+app.post('/api/motion/stop', (_req, res) => {
+  stopMotionDetection()
+  res.json({ ok: true, active: motionActive })
 })
 
 // ─── Camera discovery ──────────────────────────────────────────────────────────

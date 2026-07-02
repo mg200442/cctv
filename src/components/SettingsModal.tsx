@@ -1,13 +1,15 @@
 import { useState } from 'react'
-import { X, HardDrive, Save } from 'lucide-react'
+import { X, HardDrive, Save, Volume2, VolumeX } from 'lucide-react'
 
 interface Props {
   maxStorageGB: number
   onSave: (gb: number) => void
+  soundEnabled: boolean
+  onToggleSound: () => void
   onClose: () => void
 }
 
-export function SettingsModal({ maxStorageGB, onSave, onClose }: Props) {
+export function SettingsModal({ maxStorageGB, onSave, soundEnabled, onToggleSound, onClose }: Props) {
   const [value, setValue] = useState(String(maxStorageGB))
 
   function handleSave() {
@@ -106,6 +108,33 @@ export function SettingsModal({ maxStorageGB, onSave, onClose }: Props) {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Sound setting */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 10, letterSpacing: '.12em', color: '#7E858C' }}>
+                SONIDO DE ALERTAS
+              </div>
+              <p style={{ fontSize: 9, color: '#565C63', letterSpacing: '.06em', lineHeight: 1.6, margin: '4px 0 0' }}>
+                Pitido al detectar movimiento o generar una grabación nueva.
+              </p>
+            </div>
+            <button
+              onClick={onToggleSound}
+              title={soundEnabled ? 'Silenciar alertas' : 'Activar sonido de alertas'}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0,
+                padding: '8px 14px', borderRadius: 10, cursor: 'pointer',
+                border: soundEnabled ? '2px solid #1f5a3a' : '2px solid #20242A',
+                background: soundEnabled ? '#0B1A14' : '#0C0E10',
+                color: soundEnabled ? '#36D399' : '#7E858C',
+                fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: '.06em',
+              }}
+            >
+              {soundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+              {soundEnabled ? 'ACTIVADO' : 'SILENCIADO'}
+            </button>
           </div>
         </div>
 

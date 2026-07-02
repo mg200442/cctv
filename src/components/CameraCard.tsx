@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Network, Unplug, Circle, StopCircle, MoreVertical, Trash2, Pencil, PowerOff } from 'lucide-react'
+import { Network, Unplug, Circle, StopCircle, MoreVertical, Trash2, Pencil, PowerOff, Pause, Play, Radar } from 'lucide-react'
 import type { Camera, AiBox } from '@/types/camera'
 import { SnapshotStream } from './SnapshotStream'
 
@@ -20,15 +20,19 @@ interface Props {
   onShowRecs: () => void
   onRename: () => void
   onRemove: () => void
+  onTogglePause: () => void
+  onToggleMotionEnabled: () => void
 }
 
 function pad(n: number) { return String(n).padStart(2, '0') }
 
 export function CameraCard({
   camera, isPlayback, isSelected = false, now, snapshotUrl,
-  onSelect, onFullscreen, onStartRec, onStopRec, onShowRecs, onRename, onRemove,
+  onSelect, onFullscreen, onStartRec, onStopRec, onShowRecs, onRename, onRemove, onTogglePause,
+  onToggleMotionEnabled,
 }: Props) {
   const [showMenu, setShowMenu] = useState(false)
+  const motionEnabled = camera.motionEnabled !== false
   const ts = camera.offline
     ? 'SIN SENAL'
     : `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
@@ -137,6 +141,31 @@ export function CameraCard({
           </div>
         </div>
         <div style={{ display: 'flex', gap: 5, alignItems: 'center', pointerEvents: 'all' }}>
+          {camera.motionActive && (
+            <div
+              title="Movimiento detectado"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 4,
+                padding: '3px 8px', borderRadius: 6,
+                background: 'rgba(56,189,248,.2)', border: '1px solid rgba(56,189,248,.7)',
+              }}
+            >
+              <Radar size={10} color="#38BDF8" className="live-dot" />
+              <span style={{ fontSize: 8, letterSpacing: '.1em', color: '#38BDF8' }}>MOVIMIENTO</span>
+            </div>
+          )}
+          {!motionEnabled && (
+            <div
+              title="Detección de movimiento desactivada para esta cámara"
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 20, height: 20, borderRadius: 6,
+                background: 'rgba(8,9,10,.6)', border: '1px solid rgba(255,255,255,.1)',
+              }}
+            >
+              <Radar size={10} color="#3A3F47" />
+            </div>
+          )}
           {!camera.offline && (
             <button
               onClick={e => { e.stopPropagation(); camera.recording ? onStopRec() : onStartRec() }}
@@ -190,6 +219,18 @@ export function CameraCard({
               >
                 <MenuItem icon={Trash2} label="GRABACIONES" color="#7E858C" onClick={() => { setShowMenu(false); onShowRecs() }} />
                 <MenuItem icon={Pencil} label="RENOMBRAR" color="#7E858C" onClick={() => { setShowMenu(false); onRename() }} />
+                <MenuItem
+                  icon={camera.enabled ? Pause : Play}
+                  label={camera.enabled ? 'PAUSAR' : 'REANUDAR'}
+                  color="#7E858C"
+                  onClick={() => { setShowMenu(false); onTogglePause() }}
+                />
+                <MenuItem
+                  icon={Radar}
+                  label={motionEnabled ? 'DESACTIVAR DETECCIÓN' : 'ACTIVAR DETECCIÓN'}
+                  color={motionEnabled ? '#7E858C' : '#38BDF8'}
+                  onClick={() => { setShowMenu(false); onToggleMotionEnabled() }}
+                />
                 <div style={{ margin: '4px 0', borderTop: '1px solid #20242A' }} />
                 <MenuItem icon={PowerOff} label="DAR DE BAJA" color="#FF5247" onClick={() => { setShowMenu(false); onRemove() }} />
               </div>

@@ -2,9 +2,9 @@ import { useState } from 'react'
 import {
   User, Car, TriangleAlert, HardDrive,
   UserRound, ShieldAlert, Radar, DoorOpen, VideoOff,
-  ChevronRight, ChevronLeft,
+  ChevronRight, ChevronLeft, Video,
 } from 'lucide-react'
-import type { Alert, Device } from '@/types/camera'
+import type { Alert, Camera } from '@/types/camera'
 
 const ICON_MAP: Record<string, React.ElementType> = {
   'user-round': UserRound,
@@ -24,14 +24,20 @@ const TONE_MAP = {
 
 interface Props {
   alerts: Alert[]
-  devices: Device[]
+  cameras: Camera[]
   diskPercent: number
   recordingsSizeBytes: number
   maxStorageGB: number
+  onViewRecording: (alert: Alert) => void
 }
 
-export function RightRail({ alerts, devices, diskPercent, recordingsSizeBytes, maxStorageGB }: Props) {
+export function RightRail({ alerts, cameras, diskPercent, recordingsSizeBytes, maxStorageGB, onViewRecording }: Props) {
   const [collapsed, setCollapsed] = useState(false)
+  // "live" reflects whether the camera is actually delivering fresh frames
+  // right now (server-checked) — not just whether it hasn't been paused.
+  const liveCount = cameras.filter(c => c.enabled && c.live).length
+  const noSignalCount = cameras.filter(c => c.enabled && !c.live).length
+  const pausedCount = cameras.filter(c => !c.enabled).length
 
   const storagePercent = maxStorageGB > 0
     ? Math.round((recordingsSizeBytes / (maxStorageGB * 1024 * 1024 * 1024)) * 100)
@@ -99,7 +105,7 @@ export function RightRail({ alerts, devices, diskPercent, recordingsSizeBytes, m
       <div style={{ padding: '6px 16px 6px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <KpiCard icon={User} label="PERSONAS HOY" value="247" color="#E07820" />
         <KpiCard icon={Car} label="VEHICULOS" value="38" color="#38BDF8" />
-        <KpiCard icon={TriangleAlert} label="ALERTAS" value="12" color="#FF5247" />
+        <KpiCard icon={TriangleAlert} label="ALERTAS" value={String(alerts.length)} color="#FF5247" />
         <KpiCard
           icon={HardDrive}
           label={`ALMACEN /${maxStorageGB}GB`}
@@ -150,6 +156,19 @@ export function RightRail({ alerts, devices, diskPercent, recordingsSizeBytes, m
                 <div style={{ fontSize: 10, color: '#C9C4BB' }}>{al.time}</div>
                 <div style={{ fontSize: 8, letterSpacing: '.1em', color, marginTop: 3 }}>{al.sev}</div>
               </div>
+              {al.recording && (
+                <button
+                  onClick={() => onViewRecording(al)}
+                  title="Ver grabación de esta alerta"
+                  style={{
+                    width: 28, height: 28, borderRadius: 7, flexShrink: 0, cursor: 'pointer',
+                    border: '1px solid #20242A', background: '#0E1012', color: '#C9C4BB',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  <Video size={12} />
+                </button>
+              )}
             </div>
           )
         })}
@@ -158,21 +177,43 @@ export function RightRail({ alerts, devices, diskPercent, recordingsSizeBytes, m
       {/* Device status */}
       <div style={{ borderTop: '2px solid #20242A', padding: '12px 16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <span style={{ fontSize: 10, letterSpacing: '.14em', color: '#ECE8E1' }}>ESTADO DE EQUIPOS</span>
-          <span style={{ fontSize: 9, color: '#36D399', letterSpacing: '.08em' }}>11 ON · 1 OFF</span>
+          <span style={{ fontSize: 10, letterSpacing: '.14em', color: '#ECE8E1' }}>ESTADO DE EQUIPO DIRECTO</span>
+          <span style={{
+            fontSize: 9, letterSpacing: '.08em',
+            color: noSignalCount > 0 ? '#FF5247' : pausedCount > 0 ? '#7E858C' : '#36D399',
+          }}>
+            {liveCount} EN VIVO
+            {noSignalCount > 0 && ` · ${noSignalCount} SIN SEÑAL`}
+            {pausedCount > 0 && ` · ${pausedCount} PAUSADA${pausedCount !== 1 ? 'S' : ''}`}
+          </span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-          {devices.map((dv) => {
-            const dot = dv.on ? '#36D399' : '#FF5247'
+          {cameras.length === 0 && (
+            <span style={{ fontSize: 10, color: '#565C63' }}>Sin cámaras configuradas.</span>
+          )}
+          {cameras.map((cam) => {
+            // Three real states: paused by the operator, enabled but not
+            // actually delivering frames (network/camera down), or genuinely live.
+            const status = !cam.enabled ? 'paused' : cam.live ? 'live' : 'noSignal'
+            const dot = status === 'live' ? '#36D399' : status === 'noSignal' ? '#FF5247' : '#7E858C'
+            const label = status === 'live' ? 'EN VIVO' : status === 'noSignal' ? 'SIN SEÑAL' : 'PAUSADA'
             return (
-              <div key={dv.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot, flexShrink: 0 }} />
-                <span style={{ fontSize: 10, color: '#C9C4BB', width: 56, flexShrink: 0 }}>{dv.id}</span>
+              <div key={cam.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span
+                  className={status === 'live' ? 'live-dot' : ''}
+                  style={{ width: 8, height: 8, borderRadius: '50%', background: dot, flexShrink: 0 }}
+                />
+                <span style={{
+                  fontSize: 10, color: '#C9C4BB', maxWidth: 80, flexShrink: 0,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>{cam.label}</span>
                 <span style={{
                   fontSize: 10, color: '#7E858C', flex: 1, minWidth: 0,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>{dv.zone}</span>
-                <span style={{ fontSize: 9, letterSpacing: '.06em', color: dot }}>{dv.status}</span>
+                }}>{cam.zone}</span>
+                <span style={{ fontSize: 9, letterSpacing: '.06em', color: dot }}>
+                  {label}
+                </span>
               </div>
             )
           })}

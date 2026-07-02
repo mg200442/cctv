@@ -1,4 +1,4 @@
-import { Search, Cctv } from 'lucide-react'
+import { Search, Cctv, PauseCircle, PlayCircle, Radar, WifiOff, Wrench } from 'lucide-react'
 
 interface Props {
   now: Date
@@ -8,6 +8,13 @@ interface Props {
   camerasOnline: number
   searchQuery: string
   onSearch: (q: string) => void
+  allPaused: boolean
+  onToggleAllPaused: () => void
+  motionActive: boolean
+  onToggleMotion: () => void
+  networkOk: boolean
+  repairingNetwork: boolean
+  onRepairNetwork: () => void
 }
 
 function pad(n: number) { return String(n).padStart(2, '0') }
@@ -15,7 +22,11 @@ function pad(n: number) { return String(n).padStart(2, '0') }
 const DIAS = ['DOM','LUN','MAR','MIE','JUE','VIE','SAB']
 const MESES = ['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC']
 
-export function Header({ now, serverOk, activeRecordings, camerasMax, camerasOnline, searchQuery, onSearch }: Props) {
+export function Header({
+  now, serverOk, activeRecordings, camerasMax, camerasOnline, searchQuery, onSearch,
+  allPaused, onToggleAllPaused, motionActive, onToggleMotion,
+  networkOk, repairingNetwork, onRepairNetwork,
+}: Props) {
   const timeStr = pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds())
   const dateStr = DIAS[now.getDay()] + ' ' + pad(now.getDate()) + ' ' + MESES[now.getMonth()] + ' ' + now.getFullYear()
 
@@ -55,6 +66,36 @@ export function Header({ now, serverOk, activeRecordings, camerasMax, camerasOnl
           {serverOk ? 'SISTEMA OPERATIVO' : 'PROXY DESCONECTADO'}
         </span>
       </div>
+
+      {/* Network alias pill — only shown once the proxy is reachable but the
+          camera subnet alias is missing (lost on Mac reboot/logout, see
+          CLAUDE.md). Lets the operator fix it without a terminal/AI session. */}
+      {serverOk && !networkOk && (
+        <button
+          onClick={onRepairNetwork}
+          disabled={repairingNetwork}
+          title="Configura el alias de red hacia la subred de la cámara (192.168.138.x). Puede pedir la contraseña de administrador."
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '7px 14px', border: '2px solid #5A1F1B', borderRadius: 999,
+            background: '#1A0E0D', cursor: repairingNetwork ? 'default' : 'pointer',
+            fontFamily: "'DM Mono', monospace",
+          }}
+        >
+          <WifiOff size={13} color="#FF5247" />
+          <span style={{ fontSize: 10, letterSpacing: '.1em', color: '#FF8079' }}>
+            RED CÁMARA DESCONECTADA
+          </span>
+          <span style={{
+            display: 'flex', alignItems: 'center', gap: 4,
+            fontSize: 10, letterSpacing: '.06em', color: '#FF5247',
+            borderLeft: '2px solid #5A1F1B', paddingLeft: 8,
+          }}>
+            <Wrench size={12} className={repairingNetwork ? 'live-dot' : ''} />
+            {repairingNetwork ? 'REPARANDO…' : 'REPARAR'}
+          </span>
+        </button>
+      )}
 
       {/* Search */}
       <label style={{
@@ -97,6 +138,41 @@ export function Header({ now, serverOk, activeRecordings, camerasMax, camerasOnl
             {dateStr}
           </div>
         </div>
+
+        {/* Pause/resume all cameras — highlighted: this is the main lever to
+            free up CPU on this machine when cameras aren't being watched. */}
+        <button
+          onClick={onToggleAllPaused}
+          title={allPaused ? 'Reanudar todas las cámaras' : 'Pausar todas las cámaras (libera CPU)'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 7,
+            padding: '8px 14px', borderRadius: 12, cursor: 'pointer',
+            border: `2px solid ${allPaused ? '#1f5a3a' : '#E07820'}`,
+            background: allPaused ? '#0B1A14' : '#1A130A',
+            color: allPaused ? '#36D399' : '#E07820',
+            fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: '.06em',
+          }}
+        >
+          {allPaused ? <PlayCircle size={16} /> : <PauseCircle size={16} />}
+          {allPaused ? 'REANUDAR TODO' : 'PAUSAR TODO'}
+        </button>
+
+        {/* Motion detection — global start/pause across all cameras */}
+        <button
+          onClick={onToggleMotion}
+          title={motionActive ? 'Pausar detección de movimiento' : 'Iniciar detección de movimiento'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 7,
+            padding: '8px 14px', borderRadius: 12, cursor: 'pointer',
+            border: `2px solid ${motionActive ? '#38BDF8' : '#20242A'}`,
+            background: motionActive ? '#0B1620' : '#0E1012',
+            color: motionActive ? '#38BDF8' : '#7E858C',
+            fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: '.06em',
+          }}
+        >
+          <Radar size={16} className={motionActive ? 'live-dot' : ''} />
+          {motionActive ? 'DETECCIÓN ACTIVA' : 'DETECTAR MOVIMIENTO'}
+        </button>
 
         <div style={{ width: 2, height: 36, background: '#20242A' }} />
 

@@ -4,23 +4,25 @@
     "label": "HOLA MUNDO",
     "zone": "Entrada Principal",
     "rtsp": "rtsp://admin:admin@192.168.138.3:554/video1",
-    "enabled": true,
-    "mac": "54:77:87:5d:55:9d"
+    "enabled": false,
+    "mac": "54:77:87:5d:55:9d",
+    "motionEnabled": false
   },
   {
     "id": "cam-02",
     "label": "Cocina",
     "zone": "Cocina",
     "rtsp": "rtsp://admin:admin@192.168.138.9:554/video1",
-    "enabled": true,
-    "mac": "54:77:87:57:d5:87"
+    "enabled": false,
+    "mac": "54:77:87:57:d5:87",
+    "motionEnabled": true
   },
   {
     "id": "cam-03",
     "label": "Cámara 4",
     "zone": "",
     "rtsp": "rtsp://admin:admin@192.168.138.5:554/video1",
-    "enabled": true,
+    "enabled": false,
     "mac": "54:77:87:57:d5:94"
   }
 ]

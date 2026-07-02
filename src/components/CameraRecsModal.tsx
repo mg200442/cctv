@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { X, Video, Download, Trash2, Play } from 'lucide-react'
 import type { Recording } from '@/hooks/useCameras'
 import { VideoPlayer } from './VideoPlayer'
@@ -7,14 +7,26 @@ interface Props {
   cameraId: string
   cameraLabel: string
   recordings: Recording[]
+  initialRecordingName?: string
   onDelete: (name: string) => Promise<void>
   onClose: () => void
 }
 
-export function CameraRecsModal({ cameraId, cameraLabel, recordings, onDelete, onClose }: Props) {
+export function CameraRecsModal({ cameraId, cameraLabel, recordings, initialRecordingName, onDelete, onClose }: Props) {
   const [activeRec, setActiveRec] = useState<Recording | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
+
+  // Opening the modal from an alert can race the recordings list: an
+  // alert-triggered recording finishes seconds ago and might not be in
+  // `recordings` yet (5s poll) at the moment the user clicks. A one-time
+  // lazy useState init would just come up empty and never retry — this
+  // effect keeps trying until the poll catches up and the entry appears.
+  useEffect(() => {
+    if (!initialRecordingName) return
+    const found = recordings.find(r => r.name === initialRecordingName)
+    if (found) setActiveRec(found)
+  }, [initialRecordingName, recordings])
 
   const camRecs = recordings.filter(r => r.cameraId === cameraId)
 

@@ -29,12 +29,14 @@ interface Props {
   onShowRecs: (id: string) => void
   onRename: (id: string) => void
   onRemove: (id: string) => void
+  onTogglePause: (id: string) => void
+  onToggleMotionEnabled: (id: string) => void
   onFullscreen: (i: number) => void
 }
 
 export function CameraGrid({
   cameras, selected, playbackCameraId, now, snapshotUrl,
-  onSelect, onAddClick, onStartRec, onStopRec, onShowRecs, onRename, onRemove, onFullscreen,
+  onSelect, onAddClick, onStartRec, onStopRec, onShowRecs, onRename, onRemove, onTogglePause, onToggleMotionEnabled, onFullscreen,
 }: Props) {
   const [focusMode, setFocusMode] = useState(false)
   const [gridCols, setGridCols] = useState(() => {
@@ -192,6 +194,8 @@ export function CameraGrid({
               onShowRecs={() => onShowRecs(focusCam.id)}
               onRename={() => onRename(focusCam.id)}
               onRemove={() => onRemove(focusCam.id)}
+              onTogglePause={() => onTogglePause(focusCam.id)}
+              onToggleMotionEnabled={() => onToggleMotionEnabled(focusCam.id)}
             />
           </div>
 
@@ -249,6 +253,8 @@ export function CameraGrid({
                       onShowRecs={() => onShowRecs(cam.id)}
                       onRename={() => onRename(cam.id)}
                       onRemove={() => onRemove(cam.id)}
+                      onTogglePause={() => onTogglePause(cam.id)}
+                      onToggleMotionEnabled={() => onToggleMotionEnabled(cam.id)}
                     />
                   </div>
                 )
@@ -287,6 +293,8 @@ export function CameraGrid({
                   onShowRecs={() => onShowRecs(cam.id)}
                   onRename={() => onRename(cam.id)}
                   onRemove={() => onRemove(cam.id)}
+                  onTogglePause={() => onTogglePause(cam.id)}
+                  onToggleMotionEnabled={() => onToggleMotionEnabled(cam.id)}
                 />
               )
             }

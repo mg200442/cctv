@@ -11,7 +11,6 @@ import { CameraRecsModal } from '@/components/CameraRecsModal'
 import { SettingsModal } from '@/components/SettingsModal'
 import { RenameCameraModal } from '@/components/RenameCameraModal'
 import { useCameras } from '@/hooks/useCameras'
-import { ALERTS, DEVICES } from '@/data/cameras'
 
 const DEFAULT_MAX_STORAGE_GB = 10
 
@@ -30,6 +29,26 @@ function playAlertBeep() {
   } catch (_) {}
 }
 
+function loadAlertsSeen(): boolean {
+  try { return localStorage.getItem('alertsSeen') === '1' } catch { return false }
+}
+
+// Persist which recordings the user has already acknowledged (Sidebar REC
+// badge), so it doesn't reset back to "everything unseen" on every reload.
+// Used to live in Timeline.tsx alongside its own GRABACIONES button/panel —
+// moved here when that button was removed in favor of just the REC nav item.
+const SEEN_REC_NAMES_KEY = 'seenRecordingNames'
+function loadSeenRecNames(): Set<string> {
+  try {
+    const v = localStorage.getItem(SEEN_REC_NAMES_KEY)
+    if (v) return new Set(JSON.parse(v))
+  } catch {}
+  return new Set()
+}
+function saveSeenRecNames(names: Set<string>) {
+  try { localStorage.setItem(SEEN_REC_NAMES_KEY, JSON.stringify([...names])) } catch {}
+}
+
 function loadMaxStorageGB(): number {
   try {
     const v = localStorage.getItem('maxStorageGB')
@@ -38,32 +57,45 @@ function loadMaxStorageGB(): number {
   return DEFAULT_MAX_STORAGE_GB
 }
 
+function loadSoundEnabled(): boolean {
+  try {
+    const v = localStorage.getItem('alertSoundEnabled')
+    if (v !== null) return v === '1'
+  } catch {}
+  return true // default on, matches previous unconditional-beep behavior
+}
+
 export default function App() {
   const [now, setNow] = useState(new Date())
   const [showAddModal, setShowAddModal] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
-  const [playing, setPlaying] = useState(false)
-  const [pos, setPos] = useState(95.5)
-  const [live, setLive] = useState(true)
-  const playRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Navigation & overlay state
   const [activeView, setActiveView] = useState<string>('live')
   const [recTab, setRecTab] = useState<RecTab>('rec')
-  const [alertsSeen, setAlertsSeen] = useState(false)
+  const [alertsSeen, setAlertsSeen] = useState<boolean>(loadAlertsSeen)
+  const [seenRecNames, setSeenRecNames] = useState<Set<string>>(loadSeenRecNames)
   const [fullscreenIdx, setFullscreenIdx] = useState<number | null>(null)
   const [cameraRecsId, setCameraRecsId] = useState<string | null>(null)
+  const [cameraRecsInitialName, setCameraRecsInitialName] = useState<string | undefined>(undefined)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [maxStorageGB, setMaxStorageGB] = useState<number>(loadMaxStorageGB)
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(loadSoundEnabled)
   const [renamingCameraId, setRenamingCameraId] = useState<string | null>(null)
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null)
 
   const {
     cameras, selected, setSelected, serverOk, recordings, diskPercent,
-    recordingsSizeBytes, addCamera, renameCamera, removeCamera,
-    startRecording, stopRecording, snapshotUrl, deleteRecording,
+    recordingsSizeBytes, addCamera, renameCamera, removeCamera, toggleCameraEnabled, toggleCameraMotion,
+    startRecording, stopRecording, snapshotUrl, deleteRecording, deleteAllRecordings,
+    alerts, motionActive, startMotion, stopMotion,
+    networkOk, repairingNetwork, repairNetwork,
   } = useCameras()
+
+  const toggleMotion = useCallback(() => {
+    if (motionActive) stopMotion(); else startMotion()
+  }, [motionActive, startMotion, stopMotion])
 
   const filteredCameras = searchQuery.trim()
     ? cameras.filter(c =>
@@ -72,7 +104,11 @@ export default function App() {
       )
     : cameras
 
-  const camerasOnline = cameras.filter(c => !c.offline).length
+  // "online" = actually enabled AND delivering live frames right now — the
+  // old `!c.offline` check used a field that's only ever set on fake demo
+  // scene data, so it always counted every real camera as online regardless
+  // of pause state (reported as a desync between this badge and reality).
+  const camerasOnline = cameras.filter(c => c.enabled && c.live).length
 
   // Clock
   useEffect(() => {
@@ -103,84 +139,101 @@ export default function App() {
           body: `${newest.cameraId.toUpperCase()} · ${newest.date} ${newest.time}`,
         })
       }
-      playAlertBeep()
+      if (soundEnabled) playAlertBeep()
     }
     prevRecCount.current = recordings.length
-  }, [recordings])
+  }, [recordings, soundEnabled])
 
-  const togglePlay = useCallback(() => {
-    if (playing) {
-      if (playRef.current) clearInterval(playRef.current)
-      setPlaying(false)
-    } else {
-      setPlaying(true)
-      setLive(false)
-      playRef.current = setInterval(() => {
-        setPos(p => {
-          if (p >= 100) {
-            if (playRef.current) clearInterval(playRef.current)
-            setPlaying(false)
-            setLive(true)
-            return 100
-          }
-          return p + 0.4
-        })
-      }, 120)
+  // Alert notifications when motion detection generates a new alert
+  const alertNotifMounted = useRef(false)
+  const prevAlertCount = useRef(0)
+  useEffect(() => {
+    if (!alertNotifMounted.current) {
+      alertNotifMounted.current = true
+      prevAlertCount.current = alerts.length
+      return
     }
-  }, [playing])
+    if (alerts.length > prevAlertCount.current) {
+      const newest = alerts[0]
+      if (newest && 'Notification' in window && Notification.permission === 'granted') {
+        new Notification('SENTINEL·OPS — Movimiento detectado', {
+          body: `${newest.cam} · ${newest.zone} · ${newest.time}`,
+        })
+      }
+      if (soundEnabled) playAlertBeep()
+    }
+    prevAlertCount.current = alerts.length
+  }, [alerts, soundEnabled])
 
-  const clickTimeline = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const r = e.currentTarget.getBoundingClientRect()
-    const p = Math.max(0, Math.min(100, ((e.clientX - r.left) / r.width) * 100))
-    if (playRef.current) clearInterval(playRef.current)
-    setPos(p)
-    setPlaying(false)
-    setLive(p > 99)
+  const markAlertsSeen = useCallback(() => {
+    setAlertsSeen(true)
+    try { localStorage.setItem('alertsSeen', '1') } catch {}
   }, [])
 
-  const seekTo = useCallback((p: number) => {
-    if (playRef.current) clearInterval(playRef.current)
-    setPos(p)
-    setPlaying(false)
-    setLive(p > 99)
-  }, [])
+  const markRecordingsSeen = useCallback(() => {
+    const all = new Set(recordings.map(r => r.name))
+    setSeenRecNames(all)
+    saveSeenRecNames(all)
+  }, [recordings])
 
   const handleNav = useCallback((view: string) => {
     if (view === 'rec') {
       setActiveView('rec')
       setRecTab('rec')
+      markRecordingsSeen()
     } else if (view === 'alertas') {
       setActiveView('rec')
       setRecTab('alertas')
-      setAlertsSeen(true)
+      markAlertsSeen()
     } else {
       setActiveView(view)
     }
-  }, [])
+  }, [markAlertsSeen, markRecordingsSeen])
 
   const handleRecTabChange = useCallback((t: RecTab) => {
     setRecTab(t)
-    if (t === 'alertas') setAlertsSeen(true)
-  }, [])
+    if (t === 'alertas') markAlertsSeen()
+  }, [markAlertsSeen])
 
   const handleSaveSettings = useCallback((gb: number) => {
     setMaxStorageGB(gb)
     try { localStorage.setItem('maxStorageGB', String(gb)) } catch {}
   }, [])
 
+  const toggleSound = useCallback(() => {
+    setSoundEnabled(prev => {
+      const next = !prev
+      try { localStorage.setItem('alertSoundEnabled', next ? '1' : '0') } catch {}
+      return next
+    })
+  }, [])
+
   const activeRecordings = cameras.filter(c => c.recording).length
   const isLive = activeView === 'live'
   const sidebarActiveView = activeView === 'rec' ? recTab : activeView
-  const alertsBadge = alertsSeen ? 0 : ALERTS.length
+  const alertsBadge = alertsSeen ? 0 : alerts.length
+  const recBadge = recordings.filter(r => !seenRecNames.has(r.name)).length
 
   const focusedCameraId = selected !== null ? cameras[selected]?.id : undefined
   const focusedRecordings = focusedCameraId
     ? recordings.filter(r => r.cameraId === focusedCameraId)
     : recordings
+  const focusedAlerts = focusedCameraId
+    ? alerts.filter(a => a.cameraId === focusedCameraId)
+    : alerts
 
   const handleSelectCamera = useCallback((i: number) => {
     setSelected(prev => prev === i ? null : i)
   }, [setSelected])
+
+  const allCamerasPaused = cameras.length > 0 && cameras.every(c => !c.enabled)
+
+  // If everything is already paused, the button resumes all; otherwise
+  // (all active, or a mix) it pauses whatever's still on.
+  const toggleAllPaused = useCallback(() => {
+    const newEnabled = allCamerasPaused
+    cameras.forEach(c => { if (c.enabled !== newEnabled) toggleCameraEnabled(c.id, newEnabled) })
+  }, [cameras, allCamerasPaused, toggleCameraEnabled])
 
   const fullscreenCam = fullscreenIdx !== null ? cameras[fullscreenIdx] : null
   const cameraRecsLabel = cameraRecsId
@@ -193,7 +246,7 @@ export default function App() {
       color: '#ECE8E1', fontFamily: "'DM Mono', monospace",
       display: 'flex', overflow: 'hidden', position: 'relative',
     }}>
-      <Sidebar activeView={sidebarActiveView} alertsBadge={alertsBadge} onNav={handleNav} onOpenSettings={() => setShowSettings(true)} />
+      <Sidebar activeView={sidebarActiveView} alertsBadge={alertsBadge} recBadge={recBadge} onNav={handleNav} onOpenSettings={() => setShowSettings(true)} />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <Header
@@ -204,6 +257,13 @@ export default function App() {
           camerasOnline={camerasOnline}
           searchQuery={searchQuery}
           onSearch={setSearchQuery}
+          allPaused={allCamerasPaused}
+          onToggleAllPaused={toggleAllPaused}
+          motionActive={motionActive}
+          onToggleMotion={toggleMotion}
+          networkOk={networkOk}
+          repairingNetwork={repairingNetwork}
+          onRepairNetwork={repairNetwork}
         />
 
         <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
@@ -219,23 +279,38 @@ export default function App() {
                 onAddClick={() => setShowAddModal(true)}
                 onStartRec={startRecording}
                 onStopRec={stopRecording}
-                onShowRecs={id => setCameraRecsId(id)}
+                onShowRecs={id => { setCameraRecsId(id); setCameraRecsInitialName(undefined) }}
                 onRename={id => setRenamingCameraId(id)}
                 onRemove={id => setConfirmRemoveId(id)}
                 onFullscreen={idx => setFullscreenIdx(idx)}
+                onTogglePause={id => {
+                  const cam = cameras.find(c => c.id === id)
+                  if (cam) toggleCameraEnabled(id, !cam.enabled)
+                }}
+                onToggleMotionEnabled={id => {
+                  const cam = cameras.find(c => c.id === id)
+                  if (cam) toggleCameraMotion(id, cam.motionEnabled === false)
+                }}
               />
               <RightRail
-                alerts={ALERTS}
-                devices={DEVICES}
+                alerts={alerts}
+                cameras={cameras}
                 diskPercent={diskPercent}
                 recordingsSizeBytes={recordingsSizeBytes}
                 maxStorageGB={maxStorageGB}
+                onViewRecording={alert => {
+                  if (!alert.recording) return
+                  setCameraRecsId(alert.cameraId)
+                  setCameraRecsInitialName(alert.recording)
+                }}
               />
             </>
           ) : (
             <RecPanel
               recordings={recordings}
+              alerts={alerts}
               onDeleteRecording={deleteRecording}
+              onDeleteAllRecordings={deleteAllRecordings}
               searchQuery={searchQuery}
               tab={recTab}
               visibleTabs={recTab === 'rec' ? ['rec'] : ['alertas', 'movimiento']}
@@ -245,13 +320,10 @@ export default function App() {
         </div>
 
         <Timeline
-          playing={playing}
-          live={live}
-          pos={pos}
+          now={now}
           recordings={focusedRecordings}
-          onTogglePlay={togglePlay}
-          onClickTimeline={clickTimeline}
-          onSeek={seekTo}
+          alerts={focusedAlerts}
+          recording={activeRecordings > 0}
         />
       </div>
 
@@ -267,6 +339,8 @@ export default function App() {
         <SettingsModal
           maxStorageGB={maxStorageGB}
           onSave={handleSaveSettings}
+          soundEnabled={soundEnabled}
+          onToggleSound={toggleSound}
           onClose={() => setShowSettings(false)}
         />
       )}
@@ -287,8 +361,9 @@ export default function App() {
           cameraId={cameraRecsId}
           cameraLabel={cameraRecsLabel}
           recordings={recordings}
+          initialRecordingName={cameraRecsInitialName}
           onDelete={deleteRecording}
-          onClose={() => setCameraRecsId(null)}
+          onClose={() => { setCameraRecsId(null); setCameraRecsInitialName(undefined) }}
         />
       )}
 
