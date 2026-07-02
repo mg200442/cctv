@@ -142,6 +142,12 @@ export function useCameras() {
     } catch {}
   }, [])
 
+  const deleteAllAlerts = useCallback(async () => {
+    const res = await fetch(`${API}/api/alerts`, { method: 'DELETE' })
+    if (!res.ok) throw new Error('Failed to delete alerts')
+    await fetchAlerts()
+  }, [fetchAlerts])
+
   const fetchMotionStatus = useCallback(async () => {
     try {
       const res = await fetch(`${API}/api/motion/status`)
@@ -289,7 +295,7 @@ export function useCameras() {
   return {
     cameras, selected, setSelected,
     loading, serverOk, recordings, diskPercent, recordingsSizeBytes,
-    alerts, motionActive, startMotion, stopMotion,
+    alerts, deleteAllAlerts, motionActive, startMotion, stopMotion,
     networkOk, repairingNetwork, repairNetwork,
     addCamera, renameCamera, removeCamera, toggleCameraEnabled, toggleCameraMotion, setCameraMotionAction,
     startRecording, stopRecording,

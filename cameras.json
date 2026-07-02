@@ -7,7 +7,7 @@
     "enabled": true,
     "mac": "54:77:87:5d:55:9d",
     "motionEnabled": true,
-    "motionAction": "snapshot"
+    "motionAction": "record"
   },
   {
     "id": "cam-02",
@@ -16,7 +16,8 @@
     "rtsp": "rtsp://admin:admin@192.168.138.9:554/video1",
     "enabled": true,
     "mac": "54:77:87:57:d5:87",
-    "motionEnabled": true
+    "motionEnabled": true,
+    "motionAction": "snapshot"
   },
   {
     "id": "cam-03",

@@ -22,6 +22,7 @@ interface Props {
   playbackCameraId: string | null
   now: Date
   snapshotUrl: (id: string) => string
+  motionActive: boolean
   onSelect: (i: number) => void
   onAddClick: () => void
   onStartRec: (id: string) => void
@@ -36,7 +37,7 @@ interface Props {
 }
 
 export function CameraGrid({
-  cameras, selected, playbackCameraId, now, snapshotUrl,
+  cameras, selected, playbackCameraId, now, snapshotUrl, motionActive,
   onSelect, onAddClick, onStartRec, onStopRec, onShowRecs, onRename, onRemove, onTogglePause, onToggleMotionEnabled, onSetMotionAction, onFullscreen,
 }: Props) {
   const [focusMode, setFocusMode] = useState(false)
@@ -188,6 +189,7 @@ export function CameraGrid({
               isSelected
               now={now}
               snapshotUrl={snapshotUrl(focusCam.id)}
+              motionActive={motionActive}
               onSelect={() => {}}
               onFullscreen={() => onFullscreen(selected!)}
               onStartRec={() => onStartRec(focusCam.id)}
@@ -248,6 +250,7 @@ export function CameraGrid({
                       isPlayback={playbackCameraId === cam.id}
                       now={now}
                       snapshotUrl={snapshotUrl(cam.id)}
+                      motionActive={motionActive}
                       onSelect={() => onSelect(i)}
                       onFullscreen={() => onFullscreen(i)}
                       onStartRec={() => onStartRec(cam.id)}
@@ -289,6 +292,7 @@ export function CameraGrid({
                   isSelected={i === selected}
                   now={now}
                   snapshotUrl={snapshotUrl(cam.id)}
+                  motionActive={motionActive}
                   onSelect={() => onSelect(i)}
                   onFullscreen={() => onFullscreen(i)}
                   onStartRec={() => onStartRec(cam.id)}

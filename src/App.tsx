@@ -91,7 +91,7 @@ export default function App() {
     cameras, selected, setSelected, serverOk, recordings, diskPercent,
     recordingsSizeBytes, addCamera, renameCamera, removeCamera, toggleCameraEnabled, toggleCameraMotion, setCameraMotionAction,
     startRecording, stopRecording, snapshotUrl, motionSnapshotUrl, deleteRecording, deleteAllRecordings, deleteAllSnapshots,
-    alerts, motionActive, startMotion, stopMotion,
+    alerts, deleteAllAlerts, motionActive, startMotion, stopMotion,
     networkOk, repairingNetwork, repairNetwork,
   } = useCameras()
 
@@ -268,6 +268,8 @@ export default function App() {
           onSearch={setSearchQuery}
           allPaused={allCamerasPaused}
           onToggleAllPaused={toggleAllPaused}
+          motionActive={motionActive}
+          onToggleMotion={toggleMotion}
           networkOk={networkOk}
           repairingNetwork={repairingNetwork}
           onRepairNetwork={repairNetwork}
@@ -282,6 +284,7 @@ export default function App() {
                 playbackCameraId={cameraRecsId}
                 now={now}
                 snapshotUrl={snapshotUrl}
+                motionActive={motionActive}
                 onSelect={handleSelectCamera}
                 onAddClick={() => setShowAddModal(true)}
                 onStartRec={startRecording}
@@ -323,9 +326,10 @@ export default function App() {
               alerts={alerts}
               onDeleteRecording={deleteRecording}
               onDeleteAllRecordings={deleteAllRecordingsAndSnapshots}
+              onDeleteAllAlerts={deleteAllAlerts}
               searchQuery={searchQuery}
               tab={recTab}
-              visibleTabs={recTab === 'rec' ? ['rec'] : ['alertas', 'movimiento']}
+              visibleTabs={recTab === 'rec' ? ['rec'] : ['alertas']}
               onTabChange={handleRecTabChange}
               motionActive={motionActive}
               onToggleMotion={toggleMotion}

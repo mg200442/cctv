@@ -13,6 +13,7 @@ interface Props {
   isSelected?: boolean
   now: Date
   snapshotUrl: string
+  motionActive: boolean
   onSelect: () => void
   onFullscreen: () => void
   onStartRec: () => void
@@ -28,12 +29,19 @@ interface Props {
 function pad(n: number) { return String(n).padStart(2, '0') }
 
 export function CameraCard({
-  camera, isPlayback, isSelected = false, now, snapshotUrl,
+  camera, isPlayback, isSelected = false, now, snapshotUrl, motionActive,
   onSelect, onFullscreen, onStartRec, onStopRec, onShowRecs, onRename, onRemove, onTogglePause,
   onToggleMotionEnabled, onSetMotionAction,
 }: Props) {
   const [showMenu, setShowMenu] = useState(false)
   const motionEnabled = camera.motionEnabled !== false
+  // Per-camera detection only actually runs while the GLOBAL switch (header
+  // / Alertas tab) is on — a camera can be individually "enabled" and still
+  // do nothing if that master switch is off. Distinguishing "armed but
+  // waiting" from "actually watching" here avoids the confusing "looks like
+  // it's already working" impression reported when the global toggle was off.
+  const motionReallyActive = motionEnabled && motionActive
+  const motionIndicatorColor = motionReallyActive ? '#38BDF8' : motionEnabled ? '#E07820' : '#3A3F47'
   const motionAction = camera.motionAction === 'snapshot' ? 'snapshot' : 'record'
   const ts = camera.offline
     ? 'SIN SENAL'
@@ -160,18 +168,50 @@ export function CameraCard({
               just when off), so it's clear at a glance which cameras are
               being watched without opening the menu. The pulsing
               "MOVIMIENTO" pill above only appears during an active
-              detection event; this is the resting on/off indicator. */}
-          <div
-            title={motionEnabled ? 'Detección de movimiento activada' : 'Detección de movimiento desactivada para esta cámara'}
+              detection event; this is the resting on/off indicator.
+              Three states, not two: off (gray) / armed-but-global-off
+              (amber — the per-camera switch is on but nothing is actually
+              running because the header/Alertas master switch is off) /
+              actually watching (cyan). Clickable — this IS the toggle now,
+              replacing the equivalent "···" menu entry entirely. */}
+          <button
+            onClick={e => { e.stopPropagation(); onToggleMotionEnabled() }}
+            onDoubleClick={e => e.stopPropagation()}
+            title={
+              !motionEnabled ? 'Detección de movimiento desactivada — clic para activar'
+                : motionReallyActive ? 'Detección de movimiento activada — clic para desactivar'
+                : 'Activada para esta cámara, pero la detección global está PAUSADA (no está vigilando ahora) — clic para desactivar'
+            }
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              width: 20, height: 20, borderRadius: 6,
-              background: motionEnabled ? 'rgba(56,189,248,.15)' : 'rgba(8,9,10,.6)',
-              border: motionEnabled ? '1px solid rgba(56,189,248,.5)' : '1px solid rgba(255,255,255,.1)',
+              width: 20, height: 20, borderRadius: 6, cursor: 'pointer',
+              background: motionEnabled ? `${motionIndicatorColor}26` : 'rgba(8,9,10,.6)',
+              border: motionEnabled ? `1px solid ${motionIndicatorColor}80` : '1px solid rgba(255,255,255,.1)',
             }}
           >
-            <Radar size={10} color={motionEnabled ? '#38BDF8' : '#3A3F47'} />
-          </div>
+            <Radar size={10} color={motionIndicatorColor} />
+          </button>
+          {/* What motion detection does when it fires — video or a still
+              snapshot. Clickable to cycle the mode — replaces the equivalent
+              "···" menu entry entirely. */}
+          <button
+            onClick={e => { e.stopPropagation(); onSetMotionAction(motionAction === 'record' ? 'snapshot' : 'record') }}
+            onDoubleClick={e => e.stopPropagation()}
+            title={
+              (motionAction === 'record' ? 'Al detectar movimiento: graba vídeo' : 'Al detectar movimiento: guarda snapshot')
+              + ' — clic para cambiar'
+            }
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              width: 20, height: 20, borderRadius: 6, cursor: 'pointer',
+              background: motionEnabled ? `${motionIndicatorColor}26` : 'rgba(8,9,10,.6)',
+              border: motionEnabled ? `1px solid ${motionIndicatorColor}80` : '1px solid rgba(255,255,255,.1)',
+            }}
+          >
+            {motionAction === 'record'
+              ? <Video size={10} color={motionIndicatorColor} />
+              : <CameraIcon size={10} color={motionIndicatorColor} />}
+          </button>
           {!camera.offline && (
             <button
               onClick={e => { e.stopPropagation(); camera.recording ? onStopRec() : onStartRec() }}
@@ -230,18 +270,6 @@ export function CameraCard({
                   label={camera.enabled ? 'PAUSAR' : 'REANUDAR'}
                   color="#7E858C"
                   onClick={() => { setShowMenu(false); onTogglePause() }}
-                />
-                <MenuItem
-                  icon={Radar}
-                  label={motionEnabled ? 'DESACTIVAR DETECCIÓN' : 'ACTIVAR DETECCIÓN'}
-                  color={motionEnabled ? '#7E858C' : '#38BDF8'}
-                  onClick={() => { setShowMenu(false); onToggleMotionEnabled() }}
-                />
-                <MenuItem
-                  icon={motionAction === 'record' ? Video : CameraIcon}
-                  label={motionAction === 'record' ? 'AL DETECTAR: GRABAR VÍDEO' : 'AL DETECTAR: SNAPSHOT'}
-                  color="#7E858C"
-                  onClick={() => { setShowMenu(false); onSetMotionAction(motionAction === 'record' ? 'snapshot' : 'record') }}
                 />
                 <div style={{ margin: '4px 0', borderTop: '1px solid #20242A' }} />
                 <MenuItem icon={PowerOff} label="DAR DE BAJA" color="#FF5247" onClick={() => { setShowMenu(false); onRemove() }} />

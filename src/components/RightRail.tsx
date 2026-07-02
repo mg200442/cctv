@@ -134,12 +134,26 @@ export function RightRail({ alerts, cameras, diskPercent, recordingsSizeBytes, m
         {alerts.map((al, i) => {
           const { color, bg } = TONE_MAP[al.tone]
           const Icon = ICON_MAP[al.icon] ?? Radar
+          const hasPreview = !!(al.recording || al.snapshot)
+          const openPreview = () => {
+            if (al.snapshot) onViewSnapshot(al)
+            else if (al.recording) onViewRecording(al)
+          }
           return (
-            <div key={i} style={{
-              display: 'flex', gap: 11, padding: 11,
-              border: '2px solid #20242A', borderRadius: 10,
-              background: '#0E1012', alignItems: 'center',
-            }}>
+            <div
+              key={i}
+              onClick={hasPreview ? openPreview : undefined}
+              title={hasPreview ? (al.snapshot ? 'Ver snapshot de esta alerta' : 'Ver grabación de esta alerta') : undefined}
+              style={{
+                display: 'flex', gap: 11, padding: 11,
+                border: '2px solid #20242A', borderRadius: 10,
+                background: '#0E1012', alignItems: 'center',
+                cursor: hasPreview ? 'pointer' : 'default',
+                transition: 'border-color .15s, background .15s',
+              }}
+              onMouseEnter={e => { if (hasPreview) { e.currentTarget.style.borderColor = '#3A3F47'; e.currentTarget.style.background = '#111417' } }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = '#20242A'; e.currentTarget.style.background = '#0E1012' }}
+            >
               <div style={{
                 width: 34, height: 34, borderRadius: 8, flexShrink: 0,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -157,31 +171,30 @@ export function RightRail({ alerts, cameras, diskPercent, recordingsSizeBytes, m
                 <div style={{ fontSize: 10, color: '#C9C4BB' }}>{al.time}</div>
                 <div style={{ fontSize: 8, letterSpacing: '.1em', color, marginTop: 3 }}>{al.sev}</div>
               </div>
+              {/* Just an indicator now — the whole row is the click target */}
               {al.recording && (
-                <button
-                  onClick={() => onViewRecording(al)}
-                  title="Ver grabación de esta alerta"
+                <div
+                  title="Grabación disponible"
                   style={{
-                    width: 28, height: 28, borderRadius: 7, flexShrink: 0, cursor: 'pointer',
-                    border: '1px solid #20242A', background: '#0E1012', color: '#C9C4BB',
+                    width: 28, height: 28, borderRadius: 7, flexShrink: 0,
+                    border: '1px solid #20242A', background: '#0A0C0D', color: '#C9C4BB',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}
                 >
                   <Video size={12} />
-                </button>
+                </div>
               )}
               {al.snapshot && (
-                <button
-                  onClick={() => onViewSnapshot(al)}
-                  title="Ver snapshot de esta alerta"
+                <div
+                  title="Snapshot disponible"
                   style={{
-                    width: 28, height: 28, borderRadius: 7, flexShrink: 0, cursor: 'pointer',
-                    border: '1px solid #20242A', background: '#0E1012', color: '#C9C4BB',
+                    width: 28, height: 28, borderRadius: 7, flexShrink: 0,
+                    border: '1px solid #20242A', background: '#0A0C0D', color: '#C9C4BB',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}
                 >
                   <CameraIcon size={12} />
-                </button>
+                </div>
               )}
             </div>
           )

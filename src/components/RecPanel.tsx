@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import {
-  Clapperboard, Bell, Activity, Video, Download, Trash2, Play, Pause,
+  Clapperboard, Bell, Video, Download, Trash2, Play, Pause,
   X, Car, UserRound, ShieldAlert, Radar, DoorOpen, VideoOff, Search,
+  Camera as CameraIcon,
 } from 'lucide-react'
 import type { Recording } from '@/hooks/useCameras'
 import type { Alert } from '@/types/camera'
 import { VideoPlayer } from './VideoPlayer'
 
-export type Tab = 'rec' | 'alertas' | 'movimiento'
+export type Tab = 'rec' | 'alertas'
 
 function fmtDuration(s: number) {
   if (!s) return null
@@ -31,6 +32,7 @@ interface Props {
   alerts: Alert[]
   onDeleteRecording: (name: string) => Promise<void>
   onDeleteAllRecordings: () => Promise<void>
+  onDeleteAllAlerts: () => Promise<void>
   searchQuery?: string
   tab: Tab
   visibleTabs: Tab[]
@@ -54,7 +56,7 @@ const ICON_MAP: Record<string, React.ElementType> = {
 const SEV_ORDER: Record<string, number> = { ALTA: 0, MEDIA: 1, BAJA: 2, INFO: 3 }
 
 export function RecPanel({
-  recordings, alerts, onDeleteRecording, onDeleteAllRecordings, searchQuery = '', tab, visibleTabs, onTabChange,
+  recordings, alerts, onDeleteRecording, onDeleteAllRecordings, onDeleteAllAlerts, searchQuery = '', tab, visibleTabs, onTabChange,
   motionActive, onToggleMotion,
 }: Props) {
   const [activeRec, setActiveRec] = useState<Recording | null>(null)
@@ -62,6 +64,9 @@ export function RecPanel({
   const [deleting, setDeleting] = useState<string | null>(null)
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false)
   const [deletingAll, setDeletingAll] = useState(false)
+  const [confirmDeleteAllAlerts, setConfirmDeleteAllAlerts] = useState(false)
+  const [deletingAllAlerts, setDeletingAllAlerts] = useState(false)
+  const [alertFilter, setAlertFilter] = useState<'all' | 'recording' | 'snapshot'>('all')
 
   async function handleDeleteAll() {
     setDeletingAll(true)
@@ -71,6 +76,16 @@ export function RecPanel({
     } finally {
       setDeletingAll(false)
       setConfirmDeleteAll(false)
+    }
+  }
+
+  async function handleDeleteAllAlerts() {
+    setDeletingAllAlerts(true)
+    try {
+      await onDeleteAllAlerts()
+    } finally {
+      setDeletingAllAlerts(false)
+      setConfirmDeleteAllAlerts(false)
     }
   }
 
@@ -88,11 +103,9 @@ export function RecPanel({
     return acc
   }, {})
 
-  const motionAlerts = alerts.filter(a =>
-    a.type.toLowerCase().includes('movimiento') || a.type.toLowerCase().includes('perimetro') || a.type.toLowerCase().includes('persona')
-  )
-
-  const sortedAlerts = [...alerts].sort((a, b) => (SEV_ORDER[a.sev] ?? 4) - (SEV_ORDER[b.sev] ?? 4))
+  const sortedAlerts = [...alerts]
+    .filter(a => alertFilter === 'all' ? true : alertFilter === 'recording' ? !!a.recording : !!a.snapshot)
+    .sort((a, b) => (SEV_ORDER[a.sev] ?? 4) - (SEV_ORDER[b.sev] ?? 4))
 
   async function handleDelete(name: string) {
     setDeleting(name)
@@ -108,7 +121,6 @@ export function RecPanel({
   const ALL_TABS: { key: Tab; label: string; icon: React.ElementType; count?: number }[] = [
     { key: 'rec', label: 'GRABACIONES', icon: Clapperboard, count: recordings.length },
     { key: 'alertas', label: 'ALERTAS', icon: Bell, count: alerts.length },
-    { key: 'movimiento', label: 'MOVIMIENTO', icon: Activity, count: motionAlerts.length },
   ]
   const TABS = ALL_TABS.filter(t => visibleTabs.includes(t.key))
 
@@ -409,12 +421,116 @@ export function RecPanel({
           </div>
         )}
 
-        {/* ── ALERTAS ── */}
+        {/* ── ALERTAS ── (every alert today is a motion-detection event —
+            there's no other alert source — so this covers "movimiento" too;
+            a separate MOVIMIENTO tab was just showing the same events twice) */}
         {tab === 'alertas' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ fontSize: 9, letterSpacing: '.12em', color: '#7E858C', marginBottom: 6 }}>
-              ÚLTIMAS 24H · {alerts.length} EVENTOS
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <div style={{ fontSize: 9, letterSpacing: '.12em', color: '#7E858C' }}>
+                ÚLTIMAS 24H · {alerts.length} EVENTOS
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {/* Global start/pause — also in the header, kept here too so
+                    the control lives with the section it belongs to. */}
+                <button
+                  onClick={onToggleMotion}
+                  title={motionActive ? 'Pausar detección de movimiento' : 'Iniciar detección de movimiento'}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 7,
+                    padding: '8px 14px', borderRadius: 10, cursor: 'pointer',
+                    border: `2px solid ${motionActive ? '#38BDF8' : '#20242A'}`,
+                    background: motionActive ? '#0B1620' : '#0E1012',
+                    color: motionActive ? '#38BDF8' : '#7E858C',
+                    fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: '.06em',
+                  }}
+                >
+                  <Radar size={14} className={motionActive ? 'live-dot' : ''} />
+                  {motionActive ? 'DETECCIÓN ACTIVA' : 'DETECTAR MOVIMIENTO'}
+                </button>
+
+                {alerts.length > 0 && (
+                  confirmDeleteAllAlerts ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 10, color: '#FF8079', letterSpacing: '.04em' }}>
+                        ¿Borrar {alerts.length} alerta{alerts.length !== 1 ? 's' : ''}?
+                      </span>
+                      <button
+                        onClick={handleDeleteAllAlerts}
+                        disabled={deletingAllAlerts}
+                        style={{
+                          padding: '6px 14px', borderRadius: 8, cursor: 'pointer',
+                          border: '1px solid #FF5247', background: '#1A0E0D',
+                          color: '#FF5247', fontSize: 10, letterSpacing: '.08em',
+                          fontFamily: "'DM Mono',monospace",
+                        }}
+                      >
+                        {deletingAllAlerts ? 'BORRANDO…' : 'CONFIRMAR'}
+                      </button>
+                      <button
+                        onClick={() => setConfirmDeleteAllAlerts(false)}
+                        disabled={deletingAllAlerts}
+                        style={{
+                          padding: '6px 14px', borderRadius: 8, cursor: 'pointer',
+                          border: '1px solid #20242A', background: 'transparent',
+                          color: '#7E858C', fontSize: 10, letterSpacing: '.08em',
+                          fontFamily: "'DM Mono',monospace",
+                        }}
+                      >
+                        CANCELAR
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmDeleteAllAlerts(true)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 7,
+                        padding: '7px 14px', borderRadius: 8, cursor: 'pointer',
+                        border: '1px solid #20242A', background: '#0E1012',
+                        color: '#7E858C', fontSize: 10, letterSpacing: '.06em',
+                        fontFamily: "'DM Mono',monospace",
+                      }}
+                    >
+                      <Trash2 size={12} /> BORRAR TODO
+                    </button>
+                  )
+                )}
+              </div>
             </div>
+
+            {/* Filter by what the alert captured — a video clip or a still snapshot */}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 2 }}>
+              {([
+                { key: 'all', label: 'TODAS', icon: null },
+                { key: 'recording', label: 'GRABACIONES', icon: Video },
+                { key: 'snapshot', label: 'SNAPSHOTS', icon: CameraIcon },
+              ] as const).map(({ key, label, icon: Icon }) => {
+                const active = alertFilter === key
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setAlertFilter(key)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '6px 12px', borderRadius: 8, cursor: 'pointer',
+                      border: active ? '1px solid #E07820' : '1px solid #20242A',
+                      background: active ? '#1A130A' : 'transparent',
+                      color: active ? '#E07820' : '#7E858C',
+                      fontSize: 9, fontFamily: "'DM Mono',monospace", letterSpacing: '.06em',
+                    }}
+                  >
+                    {Icon && <Icon size={11} />}
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+
+            {alerts.length > 0 && sortedAlerts.length === 0 && (
+              <div style={{ padding: '24px 0', textAlign: 'center', fontSize: 11, color: '#565C63' }}>
+                Sin alertas con {alertFilter === 'recording' ? 'grabación' : 'snapshot'} para este filtro.
+              </div>
+            )}
             {sortedAlerts.map((al, i) => {
               const { color, bg } = TONE_MAP[al.tone]
               const Icon = ICON_MAP[al.icon] ?? Radar
@@ -450,67 +566,9 @@ export function RecPanel({
                 </div>
               )
             })}
-          </div>
-        )}
-
-        {/* ── MOVIMIENTO ── */}
-        {tab === 'movimiento' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <div style={{ fontSize: 9, letterSpacing: '.12em', color: '#7E858C' }}>
-                DETECCIÓN DE MOVIMIENTO · {motionAlerts.length} EVENTOS
-              </div>
-              {/* Global start/pause, moved here from the header so the
-                  control lives with the section it belongs to instead of
-                  floating in the top bar regardless of which view is open. */}
-              <button
-                onClick={onToggleMotion}
-                title={motionActive ? 'Pausar detección de movimiento' : 'Iniciar detección de movimiento'}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 7,
-                  padding: '8px 14px', borderRadius: 10, cursor: 'pointer',
-                  border: `2px solid ${motionActive ? '#38BDF8' : '#20242A'}`,
-                  background: motionActive ? '#0B1620' : '#0E1012',
-                  color: motionActive ? '#38BDF8' : '#7E858C',
-                  fontFamily: "'DM Mono', monospace", fontSize: 10, letterSpacing: '.06em',
-                }}
-              >
-                <Radar size={14} className={motionActive ? 'live-dot' : ''} />
-                {motionActive ? 'DETECCIÓN ACTIVA' : 'DETECTAR MOVIMIENTO'}
-              </button>
-            </div>
-            {motionAlerts.map((al, i) => {
-              const { color, bg } = TONE_MAP[al.tone]
-              const Icon = ICON_MAP[al.icon] ?? Activity
-              return (
-                <div key={i} style={{
-                  display: 'flex', gap: 12, padding: '12px 14px',
-                  border: '2px solid #20242A', borderRadius: 10, background: '#0A0C0D',
-                  alignItems: 'center',
-                }}>
-                  <div style={{
-                    width: 36, height: 36, borderRadius: 9, flexShrink: 0,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    border: `2px solid ${color}`, color, background: bg,
-                  }}>
-                    <Icon size={16} />
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, color: '#ECE8E1' }}>{al.type}</div>
-                    <div style={{ fontSize: 9, color: '#7E858C', marginTop: 2, letterSpacing: '.04em' }}>
-                      {al.cam} · {al.zone}
-                    </div>
-                  </div>
-                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                    <div style={{ fontSize: 11, color: '#C9C4BB' }}>{al.time}</div>
-                    <div style={{ fontSize: 8, letterSpacing: '.1em', color, marginTop: 3 }}>{al.sev}</div>
-                  </div>
-                </div>
-              )
-            })}
-            {motionAlerts.length === 0 && (
+            {alerts.length === 0 && (
               <div style={{ padding: '32px 0', textAlign: 'center', fontSize: 11, color: '#565C63' }}>
-                Sin eventos de movimiento detectados.
+                Sin alertas todavía.
               </div>
             )}
           </div>
