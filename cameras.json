@@ -7,7 +7,7 @@
     "enabled": true,
     "mac": "54:77:87:5d:55:9d",
     "motionEnabled": true,
-    "motionAction": "record"
+    "motionAction": "snapshot"
   },
   {
     "id": "cam-02",

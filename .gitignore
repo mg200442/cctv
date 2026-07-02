@@ -1,5 +1,10 @@
 node_modules/
 dist/
 recordings/
+snapshots/
+detection-frames/
+alerts.json
+detections.json
 tsconfig.tsbuildinfo
 .DS_Store
+.env

@@ -1,7 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import { spawn, execSync, exec } from 'child_process'
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync, statSync } from 'fs'
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, unlinkSync, statSync, rmSync } from 'fs'
 import { join, dirname, basename } from 'path'
 import { fileURLToPath } from 'url'
 import { promisify } from 'util'
@@ -10,19 +10,31 @@ import os from 'os'
 import ffmpegStatic from 'ffmpeg-static'
 import jpeg from 'jpeg-js'
 import * as tf from '@tensorflow/tfjs'
+import * as cocoSsd from '@tensorflow-models/coco-ssd'
 
 const execAsync = promisify(exec)
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
+// Loads .env into process.env if present (e.g. TELEGRAM_BOT_TOKEN/CHAT_ID) —
+// native Node API (22+), no dotenv dependency needed. Silently a no-op if
+// the file doesn't exist, which is the default/expected state — nothing in
+// this project REQUIRES a .env, it's just a convenience over always passing
+// env vars inline on the command line. .env is gitignored; never commit
+// real secrets into it. See .env.example for the expected keys.
+try { process.loadEnvFile(join(__dirname, '.env')) } catch {}
+
 const PORT = process.env.PORT || 3001
 const RECORDINGS_DIR = join(__dirname, 'recordings')
 const SNAPSHOTS_DIR = join(__dirname, 'snapshots')
+const DETECTION_FRAMES_DIR = join(__dirname, 'detection-frames')
 const CONFIG_FILE = join(__dirname, 'cameras.json')
 const ALERTS_FILE = join(__dirname, 'alerts.json')
+const DETECTIONS_FILE = join(__dirname, 'detections.json')
 
 mkdirSync(RECORDINGS_DIR, { recursive: true })
 mkdirSync(SNAPSHOTS_DIR, { recursive: true })
+mkdirSync(DETECTION_FRAMES_DIR, { recursive: true })
 
 // --- ffmpeg resolution (portable across machines/OSes) ---
 // Order: explicit override → bundled static binary (ffmpeg-static, matches
@@ -193,6 +205,34 @@ function addAlert(alert) {
   if (alerts.length > MAX_ALERTS) alerts.length = MAX_ALERTS
   writeFileSync(ALERTS_FILE, JSON.stringify(alerts, null, 2))
   return alerts
+}
+
+// --- Telegram alert notifications (optional — off unless configured) ---
+// Set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (see CLAUDE.md for how to get
+// them from @BotFather) to get a photo pushed to Telegram on every motion
+// alert. Uses Node's built-in fetch/FormData/Blob (Node 18+) — no extra
+// dependency needed just for this.
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID
+const TELEGRAM_ENABLED = !!(TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID)
+if (TELEGRAM_ENABLED) console.log('  Telegram alerts: enabled')
+
+// Fire-and-forget on purpose — the caller is inside the per-camera motion
+// tick loop, and a slow/failing Telegram API call must never stall or break
+// motion detection for this or any other camera. Errors are logged, not
+// thrown. `MOTION_COOLDOWN_MS` (60s/camera) already caps how often this can
+// fire, so there's no extra rate-limiting needed here.
+function sendTelegramAlert(jpegBuffer, caption) {
+  if (!TELEGRAM_ENABLED || !jpegBuffer) return
+  const form = new FormData()
+  form.append('chat_id', TELEGRAM_CHAT_ID)
+  form.append('caption', caption)
+  form.append('photo', new Blob([jpegBuffer], { type: 'image/jpeg' }), 'alert.jpg')
+  fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendPhoto`, { method: 'POST', body: form })
+    .then(async res => {
+      if (!res.ok) console.error(`  ✗ Telegram alert failed (${res.status}):`, await res.text())
+    })
+    .catch(e => console.error('  ✗ Telegram alert failed:', e.message))
 }
 
 // --- Active stream processes ---
@@ -495,6 +535,14 @@ async function motionTickForCamera(camera) {
           snapshot: snapshotFile,
         })
         console.log(`  Motion: alert for ${camera.id} (${pct.toFixed(1)}% changed)`)
+        // entry.latestFrame is the current live JPEG frame — available
+        // regardless of whether this camera's motionAction is "record" or
+        // "snapshot", so Telegram always gets a photo immediately instead
+        // of waiting on a video to finish.
+        sendTelegramAlert(
+          entry.latestFrame,
+          `🚨 Movimiento detectado\n${camera.label} · ${camera.zone || 'sin zona'}\n${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+        )
       }
     } else if (now - track.lastMotionTime > MOTION_ACTIVE_DECAY_MS) {
       motionState.set(camera.id, false)
@@ -1028,6 +1076,214 @@ app.delete(/^\/api\/snapshots\/(.+)$/, (req, res) => {
   } catch {
     res.status(500).json({ error: 'Could not delete file' })
   }
+})
+
+// ─── Object detection (person/vehicle/etc, run on demand over existing
+// recordings + snapshots) ─────────────────────────────────────────────────
+//
+// Deliberately NOT real-time: benchmarked at ~4.2s per frame on this machine
+// (coco-ssd, lite_mobilenet_v2, pure-JS tfjs backend — same constraint as
+// motion detection, no tfjs-node on Node 26, no GPU in Node). Running this
+// per-frame during live motion detection would be far too slow and would
+// stall everything else. Instead it's a manual batch job over already-
+// captured footage, with everything else paused first to free up CPU.
+//
+// Confirmed via direct benchmark: feeding a smaller/cropped frame does NOT
+// reduce inference time — coco-ssd internally resizes to its own fixed input
+// size regardless of what you give it, so cropping only helps accuracy
+// (less background noise), not speed. Not worth the extra complexity here.
+const DETECTION_MIN_SCORE = 0.5        // discard low-confidence guesses
+const DETECTION_FRAME_INTERVAL_SEC = 2.5 // how often to sample frames from a video
+
+let cocoModel = null
+async function getCocoModel() {
+  if (!cocoModel) {
+    console.log('  Object detection: loading model (first run, ~7-8s)…')
+    cocoModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' })
+    console.log('  Object detection: model ready')
+  }
+  return cocoModel
+}
+
+function loadDetections() {
+  if (!existsSync(DETECTIONS_FILE)) return {}
+  try {
+    return JSON.parse(readFileSync(DETECTIONS_FILE, 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+function saveDetections(detections) {
+  writeFileSync(DETECTIONS_FILE, JSON.stringify(detections, null, 2))
+}
+
+// Decode a JPEG straight to an int32 RGB tensor — coco-ssd wants this shape
+// (H, W, 3) with plain 0-255 pixel values. jpeg-js decodes to RGBA; drop the
+// alpha channel (same decode approach as decodeGraySmall for motion
+// detection, just keeping color instead of collapsing to gray).
+function jpegBufferToTensor(buf) {
+  const decoded = jpeg.decode(buf, { useTArray: true })
+  const { width, height, data } = decoded
+  const rgb = new Int32Array(width * height * 3)
+  for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
+    rgb[j] = data[i]; rgb[j + 1] = data[i + 1]; rgb[j + 2] = data[i + 2]
+  }
+  return tf.tensor3d(rgb, [height, width, 3], 'int32')
+}
+
+async function detectInJpeg(model, buf) {
+  const img = jpegBufferToTensor(buf)
+  try {
+    const preds = await model.detect(img)
+    return preds
+      .filter(p => p.score >= DETECTION_MIN_SCORE)
+      .map(p => ({ class: p.class, score: Math.round(p.score * 100) / 100 }))
+  } finally {
+    img.dispose()
+  }
+}
+
+// Sample frames out of a recording at a fixed interval and run detection on
+// each, keeping the best (highest-score) hit per class across all sampled
+// frames — a person only needs to be clearly visible in ONE sampled frame
+// to count, they don't need to be in all of them. The winning frame for
+// each class gets saved to DETECTION_FRAMES_DIR so the dashboard can show
+// exactly what the model saw, instead of asking for trust on a bare label —
+// requested after "no parece muy fino detectando" made clear that being
+// able to eyeball the actual frame matters more than chasing model accuracy
+// blind (a heavier base model was benchmarked and was both slower AND
+// missed a detection the current one caught — see getCocoModel()).
+async function detectInVideo(model, filePath, videoName) {
+  const tmpDir = join(os.tmpdir(), `cctv-detect-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  mkdirSync(tmpDir, { recursive: true })
+  const pattern = join(tmpDir, 'f_%04d.jpg')
+  try {
+    await execAsync(
+      `"${FFMPEG}" -loglevel quiet -i "${filePath}" -vf fps=1/${DETECTION_FRAME_INTERVAL_SEC} -q:v 5 "${pattern}"`,
+      { timeout: 60000 }
+    )
+    const frames = readdirSync(tmpDir).filter(f => f.endsWith('.jpg')).sort()
+    const best = new Map() // class -> { score, buf }
+    for (const f of frames) {
+      const buf = readFileSync(join(tmpDir, f))
+      const preds = await detectInJpeg(model, buf)
+      for (const p of preds) {
+        if (!best.has(p.class) || best.get(p.class).score < p.score) best.set(p.class, { score: p.score, buf })
+      }
+    }
+    const baseName = videoName.replace(/\.mp4$/, '')
+    return [...best.entries()].map(([cls, { score, buf }]) => {
+      const frameName = `${baseName}__${cls}.jpg`
+      writeFileSync(join(DETECTION_FRAMES_DIR, frameName), buf)
+      return { class: cls, score, frame: frameName }
+    })
+  } finally {
+    try { rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+  }
+}
+
+const detectionJob = { running: false, cancel: false, done: 0, total: 0, currentFile: null, startedAt: null }
+
+async function runDetectionBatch() {
+  if (detectionJob.running) return
+  detectionJob.running = true
+  detectionJob.cancel = false
+  detectionJob.done = 0
+  detectionJob.startedAt = new Date().toISOString()
+
+  // Pause everything else so the batch gets the whole machine — this is a
+  // background job, not real-time, so there's no reason to compete with the
+  // live views for CPU. Motion detection restarts afterwards if it was on;
+  // live-view streams don't need explicit restart, they come back on their
+  // own the moment a tile is viewed again (getOrStartStream / idle-restart,
+  // same mechanism used everywhere else in this file).
+  const wasMotionActive = motionActive
+  if (wasMotionActive) stopMotionDetection()
+  for (const id of [...streams.keys()]) stopStream(id)
+
+  try {
+    const model = await getCocoModel()
+    const detections = loadDetections()
+
+    const recordingFiles = readdirSync(RECORDINGS_DIR).filter(f => f.endsWith('.mp4'))
+    const snapshotFiles = readdirSync(SNAPSHOTS_DIR).filter(f => f.endsWith('.jpg'))
+    // Only scan files not already analyzed — same "don't redo known work"
+    // philosophy as the recordings duration cache. A "BORRAR RESULTADOS"
+    // endpoint clears this if a full rescan is ever wanted.
+    const todo = [
+      ...recordingFiles.filter(f => !detections[f]).map(f => ({ name: f, kind: 'recording' })),
+      ...snapshotFiles.filter(f => !detections[f]).map(f => ({ name: f, kind: 'snapshot' })),
+    ]
+    detectionJob.total = todo.length
+
+    for (const item of todo) {
+      if (detectionJob.cancel) break
+      detectionJob.currentFile = item.name
+      try {
+        let classes
+        if (item.kind === 'recording') {
+          classes = await detectInVideo(model, join(RECORDINGS_DIR, item.name), item.name)
+        } else {
+          // The snapshot itself already IS the detection frame — no separate
+          // frame file to save, just point `frame` at the snapshot directly.
+          const preds = await detectInJpeg(model, readFileSync(join(SNAPSHOTS_DIR, item.name)))
+          classes = preds.map(p => ({ ...p, frame: item.name }))
+        }
+        detections[item.name] = { kind: item.kind, classes, scannedAt: new Date().toISOString() }
+      } catch (e) {
+        console.error(`  Object detection failed for ${item.name}:`, e.message)
+        detections[item.name] = { kind: item.kind, classes: [], scannedAt: new Date().toISOString(), error: true }
+      }
+      saveDetections(detections) // incremental — a cancelled/crashed run doesn't lose completed work
+      detectionJob.done++
+    }
+  } finally {
+    detectionJob.running = false
+    detectionJob.currentFile = null
+    if (wasMotionActive) startMotionDetection()
+  }
+}
+
+app.post('/api/detect/run', (_req, res) => {
+  if (detectionJob.running) return res.status(409).json({ error: 'Ya hay un análisis en curso' })
+  runDetectionBatch() // fire-and-forget — client polls /api/detect/status
+  res.json({ ok: true })
+})
+
+app.post('/api/detect/stop', (_req, res) => {
+  detectionJob.cancel = true
+  res.json({ ok: true })
+})
+
+app.get('/api/detect/status', (_req, res) => {
+  const { running, done, total, currentFile, startedAt } = detectionJob
+  res.json({ running, done, total, currentFile, startedAt })
+})
+
+app.get('/api/detect/results', (_req, res) => {
+  const detections = loadDetections()
+  const results = Object.entries(detections).map(([name, d]) => ({ name, ...d }))
+  results.sort((a, b) => (b.scannedAt || '').localeCompare(a.scannedAt || ''))
+  res.json(results)
+})
+
+app.delete('/api/detect/results', (_req, res) => {
+  saveDetections({})
+  try { rmSync(DETECTION_FRAMES_DIR, { recursive: true, force: true }) } catch {}
+  mkdirSync(DETECTION_FRAMES_DIR, { recursive: true })
+  res.json({ ok: true })
+})
+
+// Serve the still frame that produced a detection — for recordings this is
+// a sampled frame saved by detectInVideo(); for snapshots the "frame" field
+// just points at the snapshot itself, served from SNAPSHOTS_DIR instead.
+app.get('/detection-frames/:file', (req, res) => {
+  const inFrames = join(DETECTION_FRAMES_DIR, req.params.file)
+  const inSnapshots = join(SNAPSHOTS_DIR, req.params.file)
+  const file = existsSync(inFrames) ? inFrames : inSnapshots
+  if (!existsSync(file)) return res.status(404).send('Not found')
+  res.sendFile(file)
 })
 
 // ─── Alerts (real, generated by motion detection) ───────────────────────────────

@@ -73,6 +73,17 @@ El servidor está preparado para correr en otra máquina (Mac o Linux) sin tocar
 
 **Nota:** los tres `spawn(FFMPEG, ...)` y el `spawn('ping', ...)` ahora tienen handler de `'error'` — si el binario no existe o no es ejecutable (p.ej. tras mover el proyecto a otra máquina y que `FFMPEG_PATH`/ffmpeg del sistema esté mal puesto), se loguea y se limpia el estado en vez de tumbar el proceso Node entero (un `spawn` sin listener de `'error'` revienta todo el proceso si el binario no arranca). Esto es defensivo de cara a portar el proyecto — no es la causa confirmada de la caída de la sesión anterior, que probablemente fue simplemente que `node server.js` corría pegado a una terminal (sin `nohup`/`systemd`/`launchd`) y murió al cerrarse esa sesión de shell.
 
+## Alertas por Telegram (opcional)
+
+Cada alerta de movimiento puede mandar automáticamente una foto a Telegram (usa `entry.latestFrame`, el frame en vivo del momento — no espera a que termine ninguna grabación). Desactivado hasta que se configure; no requiere ninguna librería nueva (`fetch`/`FormData`/`Blob` nativos de Node, verificado en Node 26).
+
+1. Habla con **@BotFather** en Telegram → `/newbot` → sigue los pasos → te da un token tipo `123456789:AAF...`. Ese es `TELEGRAM_BOT_TOKEN`.
+2. Consigue tu `TELEGRAM_CHAT_ID`: manda cualquier mensaje a tu bot recién creado, luego abre en el navegador `https://api.telegram.org/bot<TU_TOKEN>/getUpdates` — ahí aparece `"chat":{"id": ...}`. Ese número (puede ser negativo si es un grupo) es `TELEGRAM_CHAT_ID`.
+3. Copia `.env.example` a `.env` (en la raíz del proyecto) y rellena las dos variables ahí — `server.js` lo carga solo al arrancar (`process.loadEnvFile()`, nativo de Node 22+, sin dependencia `dotenv`). `.env` está en `.gitignore`: nunca se commitea, así el token real nunca toca el repo.
+   Alternativa sin `.env` (p. ej. en el `.plist` del LaunchAgent / unit de `systemd`, como `Environment=`/`EnvironmentVariables`), o pasándolas inline al arrancar — pero evita teclear el token real directamente en `server.js` u otro fichero versionado.
+
+Al arrancar, si están las dos variables, el log muestra `Telegram alerts: enabled`. El envío es "fire-and-forget" (no bloquea el tick de detección de movimiento de ninguna cámara) y usa el mismo cooldown de 60s por cámara que ya limita las alertas — no hay spam adicional que vigilar.
+
 ## Decisiones no obvias
 
 - **JPEG polling, no MJPEG**: Safari no soporta `multipart/x-mixed-replace` en `<img>`. El servidor guarda el último frame en memoria (`latestFrame`) y el frontend hace polling a `/snapshot/:id?t=timestamp` cada ~150ms. No volver a MJPEG para el feed del navegador.

@@ -13,6 +13,7 @@
     "start": "npm run build && node server.js"
   },
   "dependencies": {
+    "@tensorflow-models/coco-ssd": "^2.2.3",
     "@tensorflow/tfjs": "^4.22.0",
     "concurrently": "^10.0.3",
     "cors": "^2.8.6",

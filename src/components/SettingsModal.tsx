@@ -1,15 +1,26 @@
 import { useState } from 'react'
-import { X, HardDrive, Save, Volume2, VolumeX } from 'lucide-react'
+import { X, HardDrive, Save, Volume2, VolumeX, ScanSearch } from 'lucide-react'
+import { DETECTION_CLASS_OPTIONS } from '@/types/camera'
 
 interface Props {
   maxStorageGB: number
   onSave: (gb: number) => void
   soundEnabled: boolean
   onToggleSound: () => void
+  detectionClasses: string[]
+  onToggleDetectionClass: (cls: string) => void
   onClose: () => void
 }
 
-export function SettingsModal({ maxStorageGB, onSave, soundEnabled, onToggleSound, onClose }: Props) {
+const CLASS_LABELS: Record<string, string> = {
+  person: 'PERSONA', bicycle: 'BICICLETA', car: 'COCHE', motorcycle: 'MOTO',
+  bus: 'BUS', truck: 'CAMIÓN', dog: 'PERRO', cat: 'GATO',
+  backpack: 'MOCHILA', handbag: 'BOLSO', suitcase: 'MALETA',
+}
+
+export function SettingsModal({
+  maxStorageGB, onSave, soundEnabled, onToggleSound, detectionClasses, onToggleDetectionClass, onClose,
+}: Props) {
   const [value, setValue] = useState(String(maxStorageGB))
 
   function handleSave() {
@@ -135,6 +146,39 @@ export function SettingsModal({ maxStorageGB, onSave, soundEnabled, onToggleSoun
               {soundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
               {soundEnabled ? 'ACTIVADO' : 'SILENCIADO'}
             </button>
+          </div>
+
+          {/* Object detection class filter */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{
+              fontSize: 10, letterSpacing: '.12em', color: '#7E858C',
+              display: 'flex', alignItems: 'center', gap: 6,
+            }}>
+              <ScanSearch size={12} /> DETECCIÓN DE OBJETOS — QUÉ MOSTRAR
+            </label>
+            <p style={{ fontSize: 9, color: '#565C63', letterSpacing: '.06em', lineHeight: 1.6, margin: 0 }}>
+              Clases que la sección IA muestra al analizar grabaciones y snapshots.
+            </p>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
+              {DETECTION_CLASS_OPTIONS.map(cls => {
+                const active = detectionClasses.includes(cls)
+                return (
+                  <button
+                    key={cls}
+                    onClick={() => onToggleDetectionClass(cls)}
+                    style={{
+                      padding: '5px 12px', borderRadius: 7, cursor: 'pointer',
+                      border: active ? '1px solid #38BDF8' : '1px solid #20242A',
+                      background: active ? '#0B1620' : 'transparent',
+                      color: active ? '#38BDF8' : '#7E858C',
+                      fontSize: 10, fontFamily: "'DM Mono', monospace", letterSpacing: '.04em',
+                    }}
+                  >
+                    {CLASS_LABELS[cls] ?? cls.toUpperCase()}
+                  </button>
+                )
+              })}
+            </div>
           </div>
         </div>
 

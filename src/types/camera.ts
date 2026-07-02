@@ -47,3 +47,33 @@ export interface Alert {
   recording?: string // filename of the recording that captured this alert, if any
   snapshot?: string  // filename of the still snapshot that captured this alert (mutually exclusive with recording)
 }
+
+export interface DetectedClass {
+  class: string
+  score: number
+  frame: string // filename of the still frame that produced this hit — servable from /detection-frames/:file
+}
+
+export interface Detection {
+  name: string // recording or snapshot filename
+  kind: 'recording' | 'snapshot'
+  classes: DetectedClass[]
+  scannedAt: string
+  error?: boolean
+}
+
+export interface DetectionStatus {
+  running: boolean
+  done: number
+  total: number
+  currentFile: string | null
+  startedAt: string | null
+}
+
+// Curated subset of the 80 COCO classes coco-ssd can detect — relevant to
+// CCTV/security, not the full list (which includes irrelevant indoor
+// objects like "toaster" or "spoon"). Shown as checkboxes in Settings.
+export const DETECTION_CLASS_OPTIONS = [
+  'person', 'bicycle', 'car', 'motorcycle', 'bus', 'truck',
+  'dog', 'cat', 'backpack', 'handbag', 'suitcase',
+] as const

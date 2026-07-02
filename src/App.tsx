@@ -7,11 +7,14 @@ import { RightRail } from '@/components/RightRail'
 import { Timeline } from '@/components/Timeline'
 import { AddCameraModal } from '@/components/AddCameraModal'
 import { RecPanel, type Tab as RecTab } from '@/components/RecPanel'
+import { DetectionPanel } from '@/components/DetectionPanel'
 import { FullscreenModal } from '@/components/FullscreenModal'
 import { CameraRecsModal } from '@/components/CameraRecsModal'
 import { SettingsModal } from '@/components/SettingsModal'
 import { RenameCameraModal } from '@/components/RenameCameraModal'
 import { useCameras } from '@/hooks/useCameras'
+import { useDetection } from '@/hooks/useDetection'
+import { DETECTION_CLASS_OPTIONS } from '@/types/camera'
 
 const DEFAULT_MAX_STORAGE_GB = 10
 
@@ -66,6 +69,14 @@ function loadSoundEnabled(): boolean {
   return true // default on, matches previous unconditional-beep behavior
 }
 
+function loadDetectionClasses(): string[] {
+  try {
+    const v = localStorage.getItem('detectionClasses')
+    if (v) return JSON.parse(v)
+  } catch {}
+  return [...DETECTION_CLASS_OPTIONS] // default: everything shown, narrow down from Settings
+}
+
 export default function App() {
   const [now, setNow] = useState(new Date())
   const [showAddModal, setShowAddModal] = useState(false)
@@ -84,6 +95,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('')
   const [maxStorageGB, setMaxStorageGB] = useState<number>(loadMaxStorageGB)
   const [soundEnabled, setSoundEnabled] = useState<boolean>(loadSoundEnabled)
+  const [detectionClasses, setDetectionClasses] = useState<string[]>(loadDetectionClasses)
   const [renamingCameraId, setRenamingCameraId] = useState<string | null>(null)
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null)
 
@@ -94,6 +106,19 @@ export default function App() {
     alerts, deleteAllAlerts, motionActive, startMotion, stopMotion,
     networkOk, repairingNetwork, repairNetwork,
   } = useCameras()
+
+  const {
+    status: detectionStatus, results: detectionResults,
+    run: runDetection, stop: stopDetection, clearResults: clearDetectionResults,
+  } = useDetection()
+
+  const toggleDetectionClass = useCallback((cls: string) => {
+    setDetectionClasses(prev => {
+      const next = prev.includes(cls) ? prev.filter(c => c !== cls) : [...prev, cls]
+      try { localStorage.setItem('detectionClasses', JSON.stringify(next)) } catch {}
+      return next
+    })
+  }, [])
 
   const toggleMotion = useCallback(() => {
     if (motionActive) stopMotion(); else startMotion()
@@ -309,6 +334,7 @@ export default function App() {
                 diskPercent={diskPercent}
                 recordingsSizeBytes={recordingsSizeBytes}
                 maxStorageGB={maxStorageGB}
+                detectionResults={detectionResults}
                 onViewRecording={alert => {
                   if (!alert.recording) return
                   setCameraRecsId(alert.cameraId)
@@ -320,6 +346,20 @@ export default function App() {
                 }}
               />
             </>
+          ) : activeView === 'ia' ? (
+            <DetectionPanel
+              status={detectionStatus}
+              results={detectionResults}
+              classFilter={detectionClasses}
+              onRun={runDetection}
+              onStop={stopDetection}
+              onClearResults={clearDetectionResults}
+              onViewRecording={name => {
+                setCameraRecsId(name.split('_')[0])
+                setCameraRecsInitialName(name)
+              }}
+              onViewSnapshot={name => setViewingSnapshot(name)}
+            />
           ) : (
             <RecPanel
               recordings={recordings}
@@ -359,6 +399,8 @@ export default function App() {
           onSave={handleSaveSettings}
           soundEnabled={soundEnabled}
           onToggleSound={toggleSound}
+          detectionClasses={detectionClasses}
+          onToggleDetectionClass={toggleDetectionClass}
           onClose={() => setShowSettings(false)}
         />
       )}

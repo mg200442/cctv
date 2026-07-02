@@ -4,7 +4,25 @@ import {
   UserRound, ShieldAlert, Radar, DoorOpen, VideoOff,
   ChevronRight, ChevronLeft, Video, Camera as CameraIcon,
 } from 'lucide-react'
-import type { Alert, Camera } from '@/types/camera'
+import type { Alert, Camera, Detection } from '@/types/camera'
+
+const VEHICLE_CLASSES = ['car', 'truck', 'bus', 'motorcycle', 'bicycle']
+
+// Filenames are `${cameraId}_${timestamp}.ext` — same parsing as everywhere
+// else that reads a recording/snapshot name.
+function fileDate(name: string): string {
+  return name.replace(/\.(mp4|jpg)$/, '').split('_')[1]?.split('T')[0] ?? ''
+}
+
+function todayCounts(results: Detection[]) {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const now = new Date()
+  const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  const todays = results.filter(r => fileDate(r.name) === today)
+  const persons = todays.filter(r => r.classes.some(c => c.class === 'person')).length
+  const vehicles = todays.filter(r => r.classes.some(c => VEHICLE_CLASSES.includes(c.class))).length
+  return { persons, vehicles }
+}
 
 const ICON_MAP: Record<string, React.ElementType> = {
   'user-round': UserRound,
@@ -28,12 +46,16 @@ interface Props {
   diskPercent: number
   recordingsSizeBytes: number
   maxStorageGB: number
+  detectionResults: Detection[]
   onViewRecording: (alert: Alert) => void
   onViewSnapshot: (alert: Alert) => void
 }
 
-export function RightRail({ alerts, cameras, diskPercent, recordingsSizeBytes, maxStorageGB, onViewRecording, onViewSnapshot }: Props) {
+export function RightRail({
+  alerts, cameras, diskPercent, recordingsSizeBytes, maxStorageGB, detectionResults, onViewRecording, onViewSnapshot,
+}: Props) {
   const [collapsed, setCollapsed] = useState(false)
+  const { persons: personsToday, vehicles: vehiclesToday } = todayCounts(detectionResults)
   // "live" reflects whether the camera is actually delivering fresh frames
   // right now (server-checked) — not just whether it hasn't been paused.
   const liveCount = cameras.filter(c => c.enabled && c.live).length
@@ -104,8 +126,8 @@ export function RightRail({ alerts, cameras, diskPercent, recordingsSizeBytes, m
 
       {/* KPI grid */}
       <div style={{ padding: '6px 16px 6px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <KpiCard icon={User} label="PERSONAS HOY" value="247" color="#E07820" />
-        <KpiCard icon={Car} label="VEHICULOS" value="38" color="#38BDF8" />
+        <KpiCard icon={User} label="PERSONAS HOY" value={String(personsToday)} color="#E07820" />
+        <KpiCard icon={Car} label="VEHICULOS HOY" value={String(vehiclesToday)} color="#38BDF8" />
         <KpiCard icon={TriangleAlert} label="ALERTAS" value={String(alerts.length)} color="#FF5247" />
         <KpiCard
           icon={HardDrive}
