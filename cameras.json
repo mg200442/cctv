@@ -6,7 +6,8 @@
     "rtsp": "rtsp://admin:admin@192.168.138.3:554/video1",
     "enabled": true,
     "mac": "54:77:87:5d:55:9d",
-    "motionEnabled": true
+    "motionEnabled": true,
+    "motionAction": "snapshot"
   },
   {
     "id": "cam-02",
