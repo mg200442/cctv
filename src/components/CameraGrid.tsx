@@ -31,12 +31,13 @@ interface Props {
   onRemove: (id: string) => void
   onTogglePause: (id: string) => void
   onToggleMotionEnabled: (id: string) => void
+  onSetMotionAction: (id: string, action: 'record' | 'snapshot') => void
   onFullscreen: (i: number) => void
 }
 
 export function CameraGrid({
   cameras, selected, playbackCameraId, now, snapshotUrl,
-  onSelect, onAddClick, onStartRec, onStopRec, onShowRecs, onRename, onRemove, onTogglePause, onToggleMotionEnabled, onFullscreen,
+  onSelect, onAddClick, onStartRec, onStopRec, onShowRecs, onRename, onRemove, onTogglePause, onToggleMotionEnabled, onSetMotionAction, onFullscreen,
 }: Props) {
   const [focusMode, setFocusMode] = useState(false)
   const [gridCols, setGridCols] = useState(() => {
@@ -196,6 +197,7 @@ export function CameraGrid({
               onRemove={() => onRemove(focusCam.id)}
               onTogglePause={() => onTogglePause(focusCam.id)}
               onToggleMotionEnabled={() => onToggleMotionEnabled(focusCam.id)}
+              onSetMotionAction={action => onSetMotionAction(focusCam.id, action)}
             />
           </div>
 
@@ -255,6 +257,7 @@ export function CameraGrid({
                       onRemove={() => onRemove(cam.id)}
                       onTogglePause={() => onTogglePause(cam.id)}
                       onToggleMotionEnabled={() => onToggleMotionEnabled(cam.id)}
+                      onSetMotionAction={action => onSetMotionAction(cam.id, action)}
                     />
                   </div>
                 )
@@ -295,6 +298,7 @@ export function CameraGrid({
                   onRemove={() => onRemove(cam.id)}
                   onTogglePause={() => onTogglePause(cam.id)}
                   onToggleMotionEnabled={() => onToggleMotionEnabled(cam.id)}
+                  onSetMotionAction={action => onSetMotionAction(cam.id, action)}
                 />
               )
             }

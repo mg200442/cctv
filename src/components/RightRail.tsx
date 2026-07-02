@@ -2,7 +2,7 @@ import { useState } from 'react'
 import {
   User, Car, TriangleAlert, HardDrive,
   UserRound, ShieldAlert, Radar, DoorOpen, VideoOff,
-  ChevronRight, ChevronLeft, Video,
+  ChevronRight, ChevronLeft, Video, Camera as CameraIcon,
 } from 'lucide-react'
 import type { Alert, Camera } from '@/types/camera'
 
@@ -29,9 +29,10 @@ interface Props {
   recordingsSizeBytes: number
   maxStorageGB: number
   onViewRecording: (alert: Alert) => void
+  onViewSnapshot: (alert: Alert) => void
 }
 
-export function RightRail({ alerts, cameras, diskPercent, recordingsSizeBytes, maxStorageGB, onViewRecording }: Props) {
+export function RightRail({ alerts, cameras, diskPercent, recordingsSizeBytes, maxStorageGB, onViewRecording, onViewSnapshot }: Props) {
   const [collapsed, setCollapsed] = useState(false)
   // "live" reflects whether the camera is actually delivering fresh frames
   // right now (server-checked) — not just whether it hasn't been paused.
@@ -167,6 +168,19 @@ export function RightRail({ alerts, cameras, diskPercent, recordingsSizeBytes, m
                   }}
                 >
                   <Video size={12} />
+                </button>
+              )}
+              {al.snapshot && (
+                <button
+                  onClick={() => onViewSnapshot(al)}
+                  title="Ver snapshot de esta alerta"
+                  style={{
+                    width: 28, height: 28, borderRadius: 7, flexShrink: 0, cursor: 'pointer',
+                    border: '1px solid #20242A', background: '#0E1012', color: '#C9C4BB',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  <CameraIcon size={12} />
                 </button>
               )}
             </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { X, Download } from 'lucide-react'
 import { Sidebar } from '@/components/Sidebar'
 import { Header } from '@/components/Header'
 import { CameraGrid } from '@/components/CameraGrid'
@@ -78,6 +79,7 @@ export default function App() {
   const [fullscreenIdx, setFullscreenIdx] = useState<number | null>(null)
   const [cameraRecsId, setCameraRecsId] = useState<string | null>(null)
   const [cameraRecsInitialName, setCameraRecsInitialName] = useState<string | undefined>(undefined)
+  const [viewingSnapshot, setViewingSnapshot] = useState<string | null>(null)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [maxStorageGB, setMaxStorageGB] = useState<number>(loadMaxStorageGB)
@@ -87,8 +89,8 @@ export default function App() {
 
   const {
     cameras, selected, setSelected, serverOk, recordings, diskPercent,
-    recordingsSizeBytes, addCamera, renameCamera, removeCamera, toggleCameraEnabled, toggleCameraMotion,
-    startRecording, stopRecording, snapshotUrl, deleteRecording, deleteAllRecordings,
+    recordingsSizeBytes, addCamera, renameCamera, removeCamera, toggleCameraEnabled, toggleCameraMotion, setCameraMotionAction,
+    startRecording, stopRecording, snapshotUrl, motionSnapshotUrl, deleteRecording, deleteAllRecordings, deleteAllSnapshots,
     alerts, motionActive, startMotion, stopMotion,
     networkOk, repairingNetwork, repairNetwork,
   } = useCameras()
@@ -208,6 +210,13 @@ export default function App() {
     })
   }, [])
 
+  // Presented as one "BORRAR TODO" action in the recordings panel — motion
+  // detection can produce either videos or snapshots depending on the
+  // per-camera mode, so clearing "all the recordings" should sweep both.
+  const deleteAllRecordingsAndSnapshots = useCallback(async () => {
+    await Promise.all([deleteAllRecordings(), deleteAllSnapshots()])
+  }, [deleteAllRecordings, deleteAllSnapshots])
+
   const activeRecordings = cameras.filter(c => c.recording).length
   const isLive = activeView === 'live'
   const sidebarActiveView = activeView === 'rec' ? recTab : activeView
@@ -289,6 +298,7 @@ export default function App() {
                   const cam = cameras.find(c => c.id === id)
                   if (cam) toggleCameraMotion(id, cam.motionEnabled === false)
                 }}
+                onSetMotionAction={(id, action) => setCameraMotionAction(id, action)}
               />
               <RightRail
                 alerts={alerts}
@@ -301,6 +311,10 @@ export default function App() {
                   setCameraRecsId(alert.cameraId)
                   setCameraRecsInitialName(alert.recording)
                 }}
+                onViewSnapshot={alert => {
+                  if (!alert.snapshot) return
+                  setViewingSnapshot(alert.snapshot)
+                }}
               />
             </>
           ) : (
@@ -308,7 +322,7 @@ export default function App() {
               recordings={recordings}
               alerts={alerts}
               onDeleteRecording={deleteRecording}
-              onDeleteAllRecordings={deleteAllRecordings}
+              onDeleteAllRecordings={deleteAllRecordingsAndSnapshots}
               searchQuery={searchQuery}
               tab={recTab}
               visibleTabs={recTab === 'rec' ? ['rec'] : ['alertas', 'movimiento']}
@@ -365,6 +379,67 @@ export default function App() {
           onDelete={deleteRecording}
           onClose={() => { setCameraRecsId(null); setCameraRecsInitialName(undefined) }}
         />
+      )}
+
+      {viewingSnapshot && (
+        <div
+          onClick={() => setViewingSnapshot(null)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200,
+            background: 'rgba(8,9,10,.92)', backdropFilter: 'blur(6px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              maxWidth: '80vw', background: '#0E1012',
+              border: '2px solid #20242A', borderRadius: 16, overflow: 'hidden',
+            }}
+          >
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '14px 18px', borderBottom: '2px solid #20242A',
+            }}>
+              <span style={{ fontSize: 12, color: '#ECE8E1', letterSpacing: '.06em' }}>
+                {viewingSnapshot}
+              </span>
+              <button
+                onClick={() => setViewingSnapshot(null)}
+                style={{
+                  width: 28, height: 28, border: '2px solid #20242A', borderRadius: 8,
+                  background: 'transparent', color: '#7E858C',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <img
+              src={motionSnapshotUrl(viewingSnapshot)}
+              alt={viewingSnapshot}
+              style={{ display: 'block', maxWidth: '80vw', maxHeight: '72vh' }}
+            />
+            <div style={{
+              padding: '10px 18px', borderTop: '2px solid #20242A',
+              display: 'flex', justifyContent: 'flex-end',
+            }}>
+              <a
+                href={motionSnapshotUrl(viewingSnapshot)}
+                download={viewingSnapshot}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '7px 14px', borderRadius: 8,
+                  border: '2px solid #20242A', background: '#0C0E10',
+                  color: '#C9C4BB', fontSize: 10, letterSpacing: '.08em',
+                  textDecoration: 'none',
+                }}
+              >
+                <Download size={12} /> DESCARGAR
+              </a>
+            </div>
+          </div>
+        </div>
       )}
 
       {renamingCameraId && (() => {

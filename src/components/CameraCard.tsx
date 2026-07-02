@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Network, Unplug, Circle, StopCircle, MoreVertical, Trash2, Pencil, PowerOff, Pause, Play, Radar } from 'lucide-react'
+import { Network, Unplug, Circle, StopCircle, MoreVertical, Trash2, Pencil, PowerOff, Pause, Play, Radar, Video, Camera as CameraIcon } from 'lucide-react'
 import type { Camera, AiBox } from '@/types/camera'
 import { SnapshotStream } from './SnapshotStream'
 
@@ -22,6 +22,7 @@ interface Props {
   onRemove: () => void
   onTogglePause: () => void
   onToggleMotionEnabled: () => void
+  onSetMotionAction: (action: 'record' | 'snapshot') => void
 }
 
 function pad(n: number) { return String(n).padStart(2, '0') }
@@ -29,10 +30,11 @@ function pad(n: number) { return String(n).padStart(2, '0') }
 export function CameraCard({
   camera, isPlayback, isSelected = false, now, snapshotUrl,
   onSelect, onFullscreen, onStartRec, onStopRec, onShowRecs, onRename, onRemove, onTogglePause,
-  onToggleMotionEnabled,
+  onToggleMotionEnabled, onSetMotionAction,
 }: Props) {
   const [showMenu, setShowMenu] = useState(false)
   const motionEnabled = camera.motionEnabled !== false
+  const motionAction = camera.motionAction === 'snapshot' ? 'snapshot' : 'record'
   const ts = camera.offline
     ? 'SIN SENAL'
     : `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
@@ -234,6 +236,12 @@ export function CameraCard({
                   label={motionEnabled ? 'DESACTIVAR DETECCIÓN' : 'ACTIVAR DETECCIÓN'}
                   color={motionEnabled ? '#7E858C' : '#38BDF8'}
                   onClick={() => { setShowMenu(false); onToggleMotionEnabled() }}
+                />
+                <MenuItem
+                  icon={motionAction === 'record' ? Video : CameraIcon}
+                  label={motionAction === 'record' ? 'AL DETECTAR: GRABAR VÍDEO' : 'AL DETECTAR: SNAPSHOT'}
+                  color="#7E858C"
+                  onClick={() => { setShowMenu(false); onSetMotionAction(motionAction === 'record' ? 'snapshot' : 'record') }}
                 />
                 <div style={{ margin: '4px 0', borderTop: '1px solid #20242A' }} />
                 <MenuItem icon={PowerOff} label="DAR DE BAJA" color="#FF5247" onClick={() => { setShowMenu(false); onRemove() }} />
