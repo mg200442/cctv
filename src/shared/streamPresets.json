@@ -1,0 +1,9 @@
+{
+  "default": "equilibrado",
+  "presets": {
+    "ahorro-max":  { "label": "AHORRO MÁXIMO",  "width": 640,  "height": 360,  "q": 10, "fps": 6 },
+    "ahorro":      { "label": "AHORRO",         "width": 960,  "height": 540,  "q": 8,  "fps": 8 },
+    "equilibrado": { "label": "EQUILIBRADO",    "width": 1280, "height": 720,  "q": 5,  "fps": 12 },
+    "calidad-max": { "label": "CALIDAD MÁXIMA", "width": 2304, "height": 1296, "q": 3,  "fps": 15 }
+  }
+}

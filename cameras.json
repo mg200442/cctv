@@ -1,31 +1,23 @@
 [
   {
     "id": "cam-01",
-    "label": "HOLA MUNDO",
-    "zone": "Entrada Principal",
+    "label": "Dormitorio",
+    "zone": "Dormitorio Principal",
     "rtsp": "rtsp://admin:admin@192.168.138.3:554/video1",
-    "enabled": true,
+    "enabled": false,
     "mac": "54:77:87:5d:55:9d",
-    "motionEnabled": true,
-    "motionAction": "snapshot"
+    "motionEnabled": false,
+    "motionAction": "snapshot",
+    "streamPreset": "equilibrado"
   },
   {
     "id": "cam-02",
-    "label": "Cocina",
-    "zone": "Cocina",
+    "label": "Jardin",
+    "zone": "Jardin trasero",
     "rtsp": "rtsp://admin:admin@192.168.138.9:554/video1",
-    "enabled": true,
+    "enabled": false,
     "mac": "54:77:87:57:d5:87",
     "motionEnabled": true,
-    "motionAction": "snapshot"
-  },
-  {
-    "id": "cam-03",
-    "label": "Cámara 4",
-    "zone": "",
-    "rtsp": "rtsp://admin:admin@192.168.138.5:554/video1",
-    "enabled": true,
-    "mac": "54:77:87:57:d5:94",
     "motionAction": "snapshot"
   }
 ]

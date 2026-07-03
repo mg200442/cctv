@@ -1,7 +1,9 @@
 import { useState } from 'react'
-import { Network, Unplug, Circle, StopCircle, MoreVertical, Trash2, Pencil, PowerOff, Pause, Play, Radar, Video, Camera as CameraIcon } from 'lucide-react'
-import type { Camera, AiBox } from '@/types/camera'
+import { Network, Unplug, Circle, StopCircle, MoreVertical, Trash2, Pencil, PowerOff, Pause, Play, Radar, Video, Camera as CameraIcon, Gauge } from 'lucide-react'
+import type { Camera, AiBox, CameraStreamPresetKey, CustomStream } from '@/types/camera'
 import { SnapshotStream } from './SnapshotStream'
+import { StreamPresetModal } from './StreamPresetModal'
+import { streamPresetLabel } from '@/shared/streamPresetLabel'
 
 const BOX_COLOR: Record<AiBox['kind'], string> = {
   accent: '#E07820', cyan: '#38BDF8', red: '#FF5247',
@@ -24,6 +26,7 @@ interface Props {
   onTogglePause: () => void
   onToggleMotionEnabled: () => void
   onSetMotionAction: (action: 'record' | 'snapshot') => void
+  onSetStreamPreset: (key: CameraStreamPresetKey | null, customStream?: CustomStream) => void
 }
 
 function pad(n: number) { return String(n).padStart(2, '0') }
@@ -31,9 +34,10 @@ function pad(n: number) { return String(n).padStart(2, '0') }
 export function CameraCard({
   camera, isPlayback, isSelected = false, now, snapshotUrl, motionActive,
   onSelect, onFullscreen, onStartRec, onStopRec, onShowRecs, onRename, onRemove, onTogglePause,
-  onToggleMotionEnabled, onSetMotionAction,
+  onToggleMotionEnabled, onSetMotionAction, onSetStreamPreset,
 }: Props) {
   const [showMenu, setShowMenu] = useState(false)
+  const [showStreamModal, setShowStreamModal] = useState(false)
   const motionEnabled = camera.motionEnabled !== false
   // Per-camera detection only actually runs while the GLOBAL switch (header
   // / Alertas tab) is on — a camera can be individually "enabled" and still
@@ -49,16 +53,18 @@ export function CameraCard({
 
   const showLiveStream = camera.enabled && !camera.offline
 
-  // Border: red (recording) > orange (playback) > green (live) > dark (offline)
+  // Border: red (recording) > orange (playback) > gray (paused) > green (live) > dark (offline)
   const borderColor = camera.offline
     ? '#3A3F47'
+    : !camera.enabled
+    ? '#7E858C'
     : camera.recording
     ? '#FF5247'
     : isPlayback
     ? '#E07820'
     : '#36D399'
 
-  const glowShadow = camera.offline
+  const glowShadow = camera.offline || !camera.enabled
     ? 'none'
     : camera.recording
     ? `0 0 14px -4px #FF5247`
@@ -272,6 +278,21 @@ export function CameraCard({
                   onClick={() => { setShowMenu(false); onTogglePause() }}
                 />
                 <div style={{ margin: '4px 0', borderTop: '1px solid #20242A' }} />
+                {/* Per-camera override of the "Optimizar" preset (Timeline
+                    footer) — absent camera.streamPreset means it inherits
+                    whichever preset is set globally. Opens a modal instead
+                    of a nested submenu — the submenu used to get clipped by
+                    this card's own `overflow: hidden` (needed for the video
+                    feed/scan-line effects) whenever the card sat near an
+                    edge of the grid, and there wasn't room for the 4-field
+                    custom form either. */}
+                <MenuItem
+                  icon={Gauge}
+                  label={`CALIDAD: ${streamPresetLabel(camera.streamPreset)}`}
+                  color="#7E858C"
+                  onClick={() => { setShowMenu(false); setShowStreamModal(true) }}
+                />
+                <div style={{ margin: '4px 0', borderTop: '1px solid #20242A' }} />
                 <MenuItem icon={PowerOff} label="DAR DE BAJA" color="#FF5247" onClick={() => { setShowMenu(false); onRemove() }} />
               </div>
             )}
@@ -302,6 +323,14 @@ export function CameraCard({
           <span style={{ fontSize: 9, color: '#C9C4BB' }}>{camera.fps ?? '—'}</span>
         </div>
       </div>
+
+      {showStreamModal && (
+        <StreamPresetModal
+          camera={camera}
+          onSetStreamPreset={onSetStreamPreset}
+          onClose={() => setShowStreamModal(false)}
+        />
+      )}
     </div>
   )
 }

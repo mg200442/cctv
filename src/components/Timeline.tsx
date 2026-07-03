@@ -1,8 +1,10 @@
 import { useState, useCallback, useMemo } from 'react'
-import { Play, SkipBack, SkipForward, Download, X, Video, Radar, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Play, SkipBack, SkipForward, Download, Gauge, X, Video, Radar, ChevronLeft, ChevronRight } from 'lucide-react'
 import type { Recording } from '@/hooks/useCameras'
-import type { Alert } from '@/types/camera'
+import type { Alert, Camera, CameraStreamPresetKey, StreamPresetKey } from '@/types/camera'
 import { VideoPlayer } from './VideoPlayer'
+import streamPresets from '@/shared/streamPresets.json'
+import { streamPresetLabel } from '@/shared/streamPresetLabel'
 
 const ACCENT = '#E07820'
 
@@ -33,6 +35,9 @@ interface Props {
   recordings: Recording[]
   alerts: Alert[]
   recording: boolean
+  cameras: Camera[]
+  streamPreset: StreamPresetKey
+  onSetStreamPreset: (key: StreamPresetKey) => void
 }
 
 // Absolute epoch ms for a recording/alert — using the full date (not just
@@ -48,8 +53,18 @@ function alertTime(alert: Alert): number | null {
   return Number.isNaN(t) ? null : t
 }
 
-export function Timeline({ now, recordings, alerts, recording }: Props) {
+export function Timeline({ now, recordings, alerts, recording, cameras, streamPreset, onSetStreamPreset }: Props) {
   const [activeRec, setActiveRec] = useState<Recording | null>(null)
+  const [showOptimizeMenu, setShowOptimizeMenu] = useState(false)
+  // Keeps the button visibly accented even after the menu closes, so a
+  // non-default preset stays noticeable — not just while picking it.
+  const isOptimizeHighlighted = showOptimizeMenu || streamPreset !== streamPresets.default
+  const activePresetLabel = streamPresets.presets[streamPreset]?.label ?? streamPreset
+  // Cameras with a per-camera override (CameraCard's "CALIDAD" menu) that
+  // don't just inherit this global preset — surfaced in the dropdown so
+  // it's clear at a glance that the global choice below doesn't apply to
+  // every camera.
+  const customPresetCameras = cameras.filter((c): c is Camera & { streamPreset: CameraStreamPresetKey } => !!c.streamPreset)
   // The event (recording) the prev/next buttons last landed on — lets the
   // main Play button open it directly instead of the generic play/scrub
   // animation, and lets us show what kind of event it is. Every event here
@@ -363,7 +378,90 @@ export function Timeline({ now, recordings, alerts, recording }: Props) {
             {headTime}
           </div>
 
-          <TimelineBtn icon={Download} label="EXPORTAR" />
+          {/* Live-view performance presets — resolution/fps/quality of the
+              stream only, never touches motion detection (that stays on
+              for every camera regardless of preset). Opens UPWARD
+              (bottom: '100%'), unlike CameraCard's "···" menu, because this
+              footer sits at the very bottom of the viewport. */}
+          <div
+            tabIndex={-1}
+            onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setShowOptimizeMenu(false) }}
+            style={{ position: 'relative' }}
+          >
+            <button
+              onClick={() => setShowOptimizeMenu(s => !s)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '7px 13px', borderRadius: 10, cursor: 'pointer',
+                border: isOptimizeHighlighted ? `2px solid ${ACCENT}` : '2px solid #20242A',
+                background: isOptimizeHighlighted ? '#1A130A' : '#0E1012',
+                color: isOptimizeHighlighted ? ACCENT : '#C9C4BB',
+                fontFamily: "'DM Mono', monospace",
+              }}
+            >
+              <Gauge size={14} />
+              {/* Two-line label so the active global preset is visible
+                  without opening the menu — plain "OPTIMIZAR" gave no clue
+                  which of the 4 presets was currently in effect. */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: 1.3 }}>
+                <span style={{ fontSize: 11, letterSpacing: '.04em' }}>OPTIMIZAR</span>
+                <span style={{ fontSize: 8, letterSpacing: '.06em', opacity: .85 }}>{activePresetLabel}</span>
+              </div>
+            </button>
+
+            {showOptimizeMenu && (
+              <div
+                onClick={e => e.stopPropagation()}
+                style={{
+                  position: 'absolute', bottom: '100%', right: 0, marginBottom: 8, zIndex: 100,
+                  background: '#0E1012', border: '2px solid #20242A', borderRadius: 10,
+                  padding: '6px 0', minWidth: 240,
+                  boxShadow: '0 8px 24px rgba(0,0,0,.7)',
+                }}
+              >
+                <div style={{ padding: '4px 14px 6px', fontSize: 8, letterSpacing: '.14em', color: '#565C63' }}>
+                  CALIDAD DE VÍDEO EN VIVO
+                </div>
+                {Object.entries(streamPresets.presets).map(([key, p]) => (
+                  <TimelinePresetItem
+                    key={key}
+                    label={p.label}
+                    detail={`${p.width}×${p.height} · ${p.fps}fps`}
+                    active={streamPreset === key}
+                    onClick={() => { setShowOptimizeMenu(false); onSetStreamPreset(key as StreamPresetKey) }}
+                  />
+                ))}
+                <div style={{ margin: '4px 0', borderTop: '1px solid #20242A' }} />
+                {/* Which cameras (if any) don't inherit the preset picked
+                    above — set individually via each camera's ⋮ menu
+                    ("CALIDAD"). Without this, the global picker here looked
+                    authoritative even for cameras that actually ignore it. */}
+                <div style={{ padding: '4px 14px 6px' }}>
+                  <div style={{ fontSize: 8, letterSpacing: '.14em', color: '#565C63', marginBottom: customPresetCameras.length ? 5 : 0 }}>
+                    {customPresetCameras.length === 0
+                      ? 'NINGUNA CÁMARA TIENE CONFIGURACIÓN PERSONALIZADA'
+                      : `${customPresetCameras.length} CÁMARA${customPresetCameras.length > 1 ? 'S' : ''} CON CONFIGURACIÓN PERSONALIZADA`}
+                  </div>
+                  {customPresetCameras.map(c => (
+                    <div key={c.id} style={{
+                      display: 'flex', justifyContent: 'space-between', gap: 10,
+                      fontSize: 9, color: '#C9C4BB', padding: '2px 0',
+                    }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.label}</span>
+                      <span style={{ color: ACCENT, flexShrink: 0 }}>{streamPresetLabel(c.streamPreset, c.customStream)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ margin: '4px 0', borderTop: '1px solid #20242A' }} />
+                <div style={{
+                  padding: '6px 14px 4px', fontSize: 9, lineHeight: 1.5, color: '#565C63',
+                  maxWidth: 220,
+                }}>
+                  ¿Necesitas más rendimiento? La detección de movimiento no se ve afectada por estos presets — si hace falta, puedes desactivarla en cámaras concretas desde el menú ⋮ de cada una.
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </footer>
 
@@ -434,17 +532,24 @@ export function Timeline({ now, recordings, alerts, recording }: Props) {
   )
 }
 
-function TimelineBtn({ icon: Icon, label }: { icon: React.ElementType; label: string }) {
+function TimelinePresetItem({ label, detail, active, onClick }: {
+  label: string; detail: string; active: boolean; onClick: () => void
+}) {
   return (
-    <button style={{
-      display: 'flex', alignItems: 'center', gap: 7,
-      padding: '9px 13px', border: '2px solid #20242A', borderRadius: 10,
-      background: '#0E1012', color: '#C9C4BB',
-      fontFamily: "'DM Mono', monospace", fontSize: 11,
-      letterSpacing: '.04em', cursor: 'pointer',
-    }}>
-      <Icon size={14} />
-      {label}
+    <button
+      onClick={onClick}
+      style={{
+        width: '100%', display: 'flex', flexDirection: 'column', gap: 1,
+        padding: '7px 14px', border: 'none', background: 'transparent',
+        cursor: 'pointer', fontFamily: "'DM Mono',monospace", textAlign: 'left',
+      }}
+      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#16191C' }}
+      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'transparent' }}
+    >
+      <span style={{ fontSize: 10, letterSpacing: '.08em', color: active ? ACCENT : '#C9C4BB' }}>
+        {active ? '● ' : ''}{label}
+      </span>
+      <span style={{ fontSize: 8, letterSpacing: '.04em', color: '#565C63' }}>{detail}</span>
     </button>
   )
 }

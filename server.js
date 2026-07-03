@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url'
 import { promisify } from 'util'
 import net from 'net'
 import os from 'os'
+import crypto from 'crypto'
 import ffmpegStatic from 'ffmpeg-static'
 import jpeg from 'jpeg-js'
 import * as tf from '@tensorflow/tfjs'
@@ -25,12 +26,23 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 try { process.loadEnvFile(join(__dirname, '.env')) } catch {}
 
 const PORT = process.env.PORT || 3001
-const RECORDINGS_DIR = join(__dirname, 'recordings')
-const SNAPSHOTS_DIR = join(__dirname, 'snapshots')
-const DETECTION_FRAMES_DIR = join(__dirname, 'detection-frames')
-const CONFIG_FILE = join(__dirname, 'cameras.json')
-const ALERTS_FILE = join(__dirname, 'alerts.json')
-const DETECTIONS_FILE = join(__dirname, 'detections.json')
+// Lets tests (see tests/) point all persisted state at a throwaway temp
+// directory instead of this project's real cameras.json/recordings/etc —
+// defaults to __dirname so normal usage is unaffected.
+const DATA_DIR = process.env.CCTV_DATA_DIR || __dirname
+const RECORDINGS_DIR = join(DATA_DIR, 'recordings')
+const SNAPSHOTS_DIR = join(DATA_DIR, 'snapshots')
+const DETECTION_FRAMES_DIR = join(DATA_DIR, 'detection-frames')
+const CONFIG_FILE = join(DATA_DIR, 'cameras.json')
+const ALERTS_FILE = join(DATA_DIR, 'alerts.json')
+const DETECTIONS_FILE = join(DATA_DIR, 'detections.json')
+const SETTINGS_FILE = join(DATA_DIR, 'settings.json')
+
+// Single source of truth for the live-view "Optimizar" presets, shared with
+// the frontend (imported directly via the @/ alias) — this is bundled app
+// code, not per-deployment data, so it's read from __dirname, not DATA_DIR.
+const { presets: STREAM_PRESETS, default: DEFAULT_STREAM_PRESET } =
+  JSON.parse(readFileSync(join(__dirname, 'src/shared/streamPresets.json'), 'utf8'))
 
 mkdirSync(RECORDINGS_DIR, { recursive: true })
 mkdirSync(SNAPSHOTS_DIR, { recursive: true })
@@ -242,19 +254,48 @@ const recordings = new Map()
 
 const STALE_FRAME_MS = 3000  // serve 503 if last frame is older than this
 
+// Bounds for a per-camera manual override (camera.customStream) — same
+// range the ffmpeg -vf scale/-q:v/-r args below can sanely take. Shared by
+// the validator in PATCH /api/cameras/:id and effectiveStreamPreset's
+// defensive re-check below.
+const CUSTOM_STREAM_BOUNDS = { width: [160, 3840], height: [120, 2160], q: [1, 31], fps: [1, 30] }
+function isValidCustomStream(c) {
+  return !!c && typeof c === 'object' && ['width', 'height', 'q', 'fps'].every(k => {
+    const [min, max] = CUSTOM_STREAM_BOUNDS[k]
+    return Number.isFinite(c[k]) && c[k] >= min && c[k] <= max
+  })
+}
+
+// Resolves which stream settings apply to this camera's live view: a
+// per-camera override wins if set and still valid — either one of the 4
+// fixed presets, or manual customStream numbers ("PERSONALIZADO" in
+// CameraCard's CALIDAD menu) — otherwise falls back to the global setting.
+// Only read at stream-spawn time (see getOrStartStream) — changing it
+// doesn't affect an already-running process.
+function effectiveStreamPreset(camera) {
+  if (camera.streamPreset === 'custom' && isValidCustomStream(camera.customStream)) {
+    return camera.customStream
+  }
+  const key = camera.streamPreset && STREAM_PRESETS[camera.streamPreset]
+    ? camera.streamPreset
+    : loadSettings().streamPreset
+  return STREAM_PRESETS[key] ?? STREAM_PRESETS[DEFAULT_STREAM_PRESET]
+}
+
 function getOrStartStream(camera) {
   if (streams.has(camera.id)) return streams.get(camera.id)
 
   const entry = { proc: null, clients: new Set(), latestFrame: null, lastFrameTime: 0, lastRequestTime: Date.now(), startedAt: Date.now() }
 
+  const preset = effectiveStreamPreset(camera)
   const args = [
     '-loglevel', 'quiet',
     ...HWACCEL_ARGS, // no-op unless FFMPEG_HWACCEL is set — see resolveHwaccelArgs()
     '-rtsp_transport', 'tcp',
     '-i', camera.rtsp,
-    '-vf', 'scale=1280:720',
-    '-q:v', '5',
-    '-r', '12',
+    '-vf', `scale=${preset.width}:${preset.height}`,
+    '-q:v', String(preset.q),
+    '-r', String(preset.fps),
     '-f', 'mjpeg',
     'pipe:1',
   ]
@@ -630,6 +671,43 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
+// --- Optional HTTP Basic Auth (off unless configured) ---
+// Anyone on the same network (or who reaches this port) could otherwise
+// view live cameras, delete recordings, control motion detection, etc. —
+// no login of any kind existed before this. Set AUTH_USER + AUTH_PASS
+// (.env, same pattern as TELEGRAM_*/FFMPEG_HWACCEL) to require them; the
+// browser's native Basic Auth prompt handles the UI, no login page needed.
+// Placed before every route below, including static file serving.
+const AUTH_USER = process.env.AUTH_USER
+const AUTH_PASS = process.env.AUTH_PASS
+const AUTH_ENABLED = !!(AUTH_USER && AUTH_PASS)
+if (AUTH_ENABLED) console.log('  Auth: enabled (HTTP Basic)')
+
+function timingSafeStringEqual(a, b) {
+  const bufA = Buffer.from(a)
+  const bufB = Buffer.from(b)
+  // Constant-time compare needs equal-length buffers — pad instead of
+  // short-circuiting on length, so a wrong-length guess isn't distinguishable
+  // by timing from a right-length-wrong-content one.
+  if (bufA.length !== bufB.length) return crypto.timingSafeEqual(bufA, bufA) && false
+  return crypto.timingSafeEqual(bufA, bufB)
+}
+
+if (AUTH_ENABLED) {
+  app.use((req, res, next) => {
+    const header = req.headers.authorization || ''
+    const [scheme, encoded] = header.split(' ')
+    if (scheme === 'Basic' && encoded) {
+      const [user, pass] = Buffer.from(encoded, 'base64').toString().split(':')
+      if (user && pass && timingSafeStringEqual(user, AUTH_USER) && timingSafeStringEqual(pass, AUTH_PASS)) {
+        return next()
+      }
+    }
+    res.set('WWW-Authenticate', 'Basic realm="SENTINEL-OPS"')
+    res.status(401).send('Autenticación requerida')
+  })
+}
+
 // Camera-subnet network alias status/repair — lets the dashboard fix the
 // "aliases lost on reboot/logout" issue (see CLAUDE.md) with a button instead
 // of a terminal/AI session.
@@ -689,7 +767,7 @@ app.post('/api/cameras', (req, res) => {
 
 // Rename / update camera label & zone
 app.patch('/api/cameras/:id', (req, res) => {
-  const { label, zone, enabled, motionEnabled, motionAction } = req.body
+  const { label, zone, enabled, motionEnabled, motionAction, streamPreset, customStream } = req.body
   const cameras = loadConfig()
   const cam = cameras.find(c => c.id === req.params.id)
   if (!cam) return res.status(404).json({ error: 'Not found' })
@@ -698,6 +776,31 @@ app.patch('/api/cameras/:id', (req, res) => {
   if (typeof enabled === 'boolean') cam.enabled = enabled
   if (typeof motionEnabled === 'boolean') cam.motionEnabled = motionEnabled
   if (motionAction === 'record' || motionAction === 'snapshot') cam.motionAction = motionAction
+
+  // streamPreset: a preset key sets a per-camera override; null clears it
+  // back to "inherit the global preset"; 'custom' requires a valid
+  // customStream object (manual width/height/q/fps — "PERSONALIZADO" in
+  // CameraCard's CALIDAD menu) alongside it. Anything else invalid is
+  // rejected rather than silently ignored, so a typo in the UI doesn't look
+  // like it "worked" and then does nothing.
+  let presetChanged = false
+  if (streamPreset !== undefined) {
+    if (streamPreset === null) {
+      if (cam.streamPreset !== undefined) { delete cam.streamPreset; presetChanged = true }
+      if (cam.customStream !== undefined) { delete cam.customStream; presetChanged = true }
+    } else if (streamPreset === 'custom') {
+      if (!isValidCustomStream(customStream)) return res.status(400).json({ error: 'customStream inválido' })
+      cam.streamPreset = 'custom'
+      cam.customStream = { width: customStream.width, height: customStream.height, q: customStream.q, fps: customStream.fps }
+      presetChanged = true
+    } else if (STREAM_PRESETS[streamPreset]) {
+      if (cam.streamPreset !== streamPreset) { cam.streamPreset = streamPreset; presetChanged = true }
+      if (cam.customStream !== undefined) { delete cam.customStream; presetChanged = true }
+    } else {
+      return res.status(400).json({ error: 'streamPreset inválido' })
+    }
+  }
+
   saveConfig(cameras)
   if (typeof enabled === 'boolean' || typeof motionEnabled === 'boolean') {
     // Free CPU immediately when nothing needs this camera's stream anymore
@@ -709,6 +812,12 @@ app.patch('/api/cameras/:id', (req, res) => {
     if (!streamStillNeeded(cam)) stopStream(cam.id)
     syncCameraMotionLoop(cam)
   }
+  // Force the live-view ffmpeg process to respawn with the new preset's
+  // args on the next request — same stop-and-let-getOrStartStream-respawn
+  // mechanism the idle sweep relies on. Unlike the branch above, this
+  // always stops (even if the stream is still needed) because we want an
+  // immediate respawn, not just a stop.
+  if (presetChanged) stopStream(cam.id)
   res.json(cam)
 })
 
@@ -974,7 +1083,10 @@ app.get('/api/recordings/meta', async (_req, res) => {
 // Disk usage stats for the recordings partition
 app.get('/api/stats', (_req, res) => {
   let diskPercent = 0
-  let recordingsTotalBytes = 0
+  // Counts recordings + snapshots together — this is what actually counts
+  // against maxStorageGB / the retention sweep below, so the UI's storage
+  // bar should reflect the same total the cap is enforced against.
+  const recordingsTotalBytes = getCapturedTotalBytes()
   try {
     const out = execSync(`df -k "${RECORDINGS_DIR}" 2>/dev/null`).toString()
     const lines = out.trim().split('\n')
@@ -982,12 +1094,144 @@ app.get('/api/stats', (_req, res) => {
     // macOS df -k: Filesystem 1024-blocks Used Available Capacity ...
     diskPercent = parseInt(parts[4]?.replace('%', '') ?? '0') || 0
   } catch {}
-  try {
-    const files = readdirSync(RECORDINGS_DIR).filter(f => f.endsWith('.mp4'))
-    for (const f of files) recordingsTotalBytes += statSync(join(RECORDINGS_DIR, f)).size
-  } catch {}
   res.json({ diskPercent, recordingsTotalBytes })
 })
+
+// ─── Settings (persisted server-side — needed so the storage retention
+// sweep below can enforce a cap even with no browser tab open) ───────────
+
+function loadSettings() {
+  const defaults = { maxStorageGB: 10, streamPreset: DEFAULT_STREAM_PRESET }
+  if (!existsSync(SETTINGS_FILE)) return defaults
+  try {
+    return { ...defaults, ...JSON.parse(readFileSync(SETTINGS_FILE, 'utf8')) }
+  } catch {
+    return defaults
+  }
+}
+
+function saveSettings(settings) {
+  writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2))
+}
+
+app.get('/api/settings', (_req, res) => {
+  res.json(loadSettings())
+})
+
+app.put('/api/settings', (req, res) => {
+  const { maxStorageGB, streamPreset } = req.body
+  const settings = loadSettings()
+
+  if (maxStorageGB !== undefined) {
+    if (typeof maxStorageGB !== 'number' || !(maxStorageGB > 0)) {
+      return res.status(400).json({ error: 'maxStorageGB must be a positive number' })
+    }
+    settings.maxStorageGB = maxStorageGB
+  }
+
+  if (streamPreset !== undefined) {
+    if (!STREAM_PRESETS[streamPreset]) {
+      return res.status(400).json({ error: 'streamPreset inválido' })
+    }
+    if (settings.streamPreset !== streamPreset) {
+      settings.streamPreset = streamPreset
+      // Restart only the cameras that inherit the global preset (no
+      // per-camera override) — same stop-and-let-getOrStartStream-respawn
+      // mechanism as everywhere else this preset changes.
+      for (const cam of loadConfig()) {
+        if (!cam.streamPreset && streams.has(cam.id)) stopStream(cam.id)
+      }
+    }
+  }
+
+  saveSettings(settings)
+  res.json(settings)
+})
+
+// ─── Storage retention — auto-delete oldest recordings/snapshots once
+// combined size passes maxStorageGB. Was previously just a visual 80%/95%
+// warning in the UI with no actual enforcement, so disk would fill up
+// unbounded from motion detection running indefinitely. ───────────────────
+
+function getCapturedTotalBytes() {
+  let total = 0
+  try {
+    for (const f of readdirSync(RECORDINGS_DIR)) {
+      if (f.endsWith('.mp4')) total += statSync(join(RECORDINGS_DIR, f)).size
+    }
+  } catch {}
+  try {
+    for (const f of readdirSync(SNAPSHOTS_DIR)) {
+      if (f.endsWith('.jpg')) total += statSync(join(SNAPSHOTS_DIR, f)).size
+    }
+  } catch {}
+  return total
+}
+
+// Oldest-first by the timestamp encoded in the filename itself
+// (`${cameraId}_${timestamp}.ext`) rather than mtime — mtime can be
+// misleading (e.g. a file copied/restored later), the filename timestamp is
+// the actual capture time and is how every other part of this app already
+// derives "when" for a recording/snapshot (see parseRecording in
+// useCameras.ts).
+function fileCaptureTime(name) {
+  const ts = name.replace(/\.(mp4|jpg)$/, '').split('_')[1]
+  const m = ts && ts.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})$/)
+  return m ? new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}`).getTime() : 0
+}
+
+const RETENTION_TARGET_RATIO = 0.9 // sweep down to 90% of the cap, not exactly 100% — avoids sweeping again almost immediately
+
+function enforceRetention() {
+  const settings = loadSettings()
+  const capBytes = settings.maxStorageGB * 1024 ** 3
+  let total = getCapturedTotalBytes()
+  if (total <= capBytes) return { deleted: 0, freedBytes: 0 }
+
+  const activeFiles = new Set([...recordings.values()].map(r => basename(r.file)))
+  const targetBytes = capBytes * RETENTION_TARGET_RATIO
+
+  const files = []
+  try {
+    for (const f of readdirSync(RECORDINGS_DIR)) {
+      if (f.endsWith('.mp4') && !activeFiles.has(f)) {
+        files.push({ name: f, dir: RECORDINGS_DIR, size: statSync(join(RECORDINGS_DIR, f)).size })
+      }
+    }
+  } catch {}
+  try {
+    for (const f of readdirSync(SNAPSHOTS_DIR)) {
+      if (f.endsWith('.jpg')) files.push({ name: f, dir: SNAPSHOTS_DIR, size: statSync(join(SNAPSHOTS_DIR, f)).size })
+    }
+  } catch {}
+  files.sort((a, b) => fileCaptureTime(a.name) - fileCaptureTime(b.name)) // oldest first
+
+  let deleted = 0
+  let freedBytes = 0
+  for (const f of files) {
+    if (total <= targetBytes) break
+    try {
+      unlinkSync(join(f.dir, f.name))
+      removeDetectionForFile(f.name)
+      if (f.dir === RECORDINGS_DIR) recordingMetaCache.delete(f.name)
+      total -= f.size
+      freedBytes += f.size
+      deleted++
+    } catch {}
+  }
+  if (deleted > 0) console.log(`  Storage retention: freed ${(freedBytes / 1024 / 1024).toFixed(0)}MB, deleted ${deleted} file(s)`)
+  return { deleted, freedBytes }
+}
+
+// Manual trigger — lets the user force a cleanup right away from the
+// dashboard instead of waiting for the periodic sweep, and gives tests a
+// way to exercise this without waiting on a timer.
+app.post('/api/storage/enforce', (_req, res) => {
+  res.json({ ok: true, ...enforceRetention() })
+})
+
+const RETENTION_SWEEP_INTERVAL_MS = 5 * 60_000
+setInterval(enforceRetention, RETENTION_SWEEP_INTERVAL_MS)
 
 // Delete ALL recording files at once. Skips any file a recording is
 // currently writing to (manual REC or motion auto-record) — deleting out
@@ -999,7 +1243,7 @@ app.delete('/api/recordings', (_req, res) => {
     for (const name of readdirSync(RECORDINGS_DIR)) {
       if (!name.endsWith('.mp4')) continue
       if (activeFiles.has(name)) { skipped++; continue }
-      try { unlinkSync(join(RECORDINGS_DIR, name)); recordingMetaCache.delete(name); deleted++ } catch { skipped++ }
+      try { unlinkSync(join(RECORDINGS_DIR, name)); recordingMetaCache.delete(name); removeDetectionForFile(name); deleted++ } catch { skipped++ }
     }
   } catch {}
   res.json({ ok: true, deleted, skipped })
@@ -1016,6 +1260,7 @@ app.delete(/^\/api\/recordings\/(.+)$/, (req, res) => {
   try {
     unlinkSync(file)
     recordingMetaCache.delete(filename)
+    removeDetectionForFile(filename)
     res.json({ ok: true })
   } catch {
     res.status(500).json({ error: 'Could not delete file' })
@@ -1057,7 +1302,7 @@ app.delete('/api/snapshots', (_req, res) => {
   try {
     for (const name of readdirSync(SNAPSHOTS_DIR)) {
       if (!name.endsWith('.jpg')) continue
-      try { unlinkSync(join(SNAPSHOTS_DIR, name)); deleted++ } catch { skipped++ }
+      try { unlinkSync(join(SNAPSHOTS_DIR, name)); removeDetectionForFile(name); deleted++ } catch { skipped++ }
     }
   } catch {}
   res.json({ ok: true, deleted, skipped })
@@ -1072,6 +1317,7 @@ app.delete(/^\/api\/snapshots\/(.+)$/, (req, res) => {
   if (!existsSync(file)) return res.status(404).json({ error: 'Not found' })
   try {
     unlinkSync(file)
+    removeDetectionForFile(filename)
     res.json({ ok: true })
   } catch {
     res.status(500).json({ error: 'Could not delete file' })
@@ -1116,6 +1362,26 @@ function loadDetections() {
 
 function saveDetections(detections) {
   writeFileSync(DETECTIONS_FILE, JSON.stringify(detections, null, 2))
+}
+
+// Deleting a recording/snapshot (manually, or via the storage retention
+// sweep) used to leave its detections.json entry and any saved
+// detection-frames/*.jpg files behind, pointing at a source that no longer
+// exists — called from every recording/snapshot delete path so that never
+// happens. A snapshot's own "frame" field points at itself (no separate
+// frame file was ever saved for it — see detectInJpeg), so only unlink
+// frame files that don't just equal the source name.
+function removeDetectionForFile(name) {
+  const detections = loadDetections()
+  const entry = detections[name]
+  if (!entry) return
+  for (const c of entry.classes) {
+    if (c.frame && c.frame !== name) {
+      try { unlinkSync(join(DETECTION_FRAMES_DIR, c.frame)) } catch {}
+    }
+  }
+  delete detections[name]
+  saveDetections(detections)
 }
 
 // Decode a JPEG straight to an int32 RGB tensor — coco-ssd wants this shape

@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "server": "node server.js",
     "dev:all": "concurrently \"npm run dev\" \"npm run server\"",
-    "start": "npm run build && node server.js"
+    "start": "npm run build && node server.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@tensorflow-models/coco-ssd": "^2.2.3",

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { X, HardDrive, Save, Volume2, VolumeX, ScanSearch } from 'lucide-react'
+import { X, HardDrive, Save, Volume2, VolumeX, ScanSearch, Trash2 } from 'lucide-react'
 import { DETECTION_CLASS_OPTIONS } from '@/types/camera'
 
 interface Props {
@@ -22,6 +22,26 @@ export function SettingsModal({
   maxStorageGB, onSave, soundEnabled, onToggleSound, detectionClasses, onToggleDetectionClass, onClose,
 }: Props) {
   const [value, setValue] = useState(String(maxStorageGB))
+  const [enforcing, setEnforcing] = useState(false)
+  const [enforceResult, setEnforceResult] = useState<string | null>(null)
+
+  async function handleEnforceNow() {
+    setEnforcing(true)
+    setEnforceResult(null)
+    try {
+      const res = await fetch('/api/storage/enforce', { method: 'POST' })
+      const data = await res.json()
+      setEnforceResult(
+        data.deleted > 0
+          ? `Borrados ${data.deleted} archivo(s), liberados ${(data.freedBytes / 1024 / 1024).toFixed(0)}MB`
+          : 'Ya por debajo del límite — nada que borrar'
+      )
+    } catch {
+      setEnforceResult('No se pudo comprobar el almacenamiento')
+    } finally {
+      setEnforcing(false)
+    }
+  }
 
   function handleSave() {
     const parsed = parseFloat(value)
@@ -98,7 +118,7 @@ export function SettingsModal({
               <span style={{ fontSize: 12, color: '#7E858C', letterSpacing: '.06em', flexShrink: 0 }}>GB</span>
             </div>
             <p style={{ fontSize: 9, color: '#565C63', letterSpacing: '.06em', lineHeight: 1.6, margin: 0 }}>
-              Se mostrará aviso cuando el uso supere el 80% y alerta crítica al 95%.
+              Al superar este límite, se borran automáticamente las grabaciones y snapshots más antiguos (revisión cada 5 min) hasta bajar al 90%.
             </p>
 
             {/* Quick presets */}
@@ -118,6 +138,25 @@ export function SettingsModal({
                   {gb >= 1000 ? `${gb / 1000} TB` : `${gb} GB`}
                 </button>
               ))}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+              <button
+                onClick={handleEnforceNow}
+                disabled={enforcing}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 7,
+                  padding: '7px 14px', borderRadius: 8, cursor: enforcing ? 'default' : 'pointer',
+                  border: '1px solid #20242A', background: '#0E1012',
+                  color: '#7E858C', fontSize: 10, letterSpacing: '.06em',
+                  fontFamily: "'DM Mono', monospace",
+                }}
+              >
+                <Trash2 size={12} /> {enforcing ? 'COMPROBANDO…' : 'FORZAR LIMPIEZA AHORA'}
+              </button>
+              {enforceResult && (
+                <span style={{ fontSize: 9, color: '#565C63' }}>{enforceResult}</span>
+              )}
             </div>
           </div>
 

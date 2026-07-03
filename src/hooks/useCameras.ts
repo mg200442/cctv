@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { Camera, ServerCamera, Alert } from '@/types/camera'
+import type { Camera, ServerCamera, Alert, CameraStreamPresetKey, CustomStream } from '@/types/camera'
 
 const API = ''
 
@@ -230,6 +230,15 @@ export function useCameras() {
     await fetchCameras()
   }, [fetchCameras])
 
+  const setCameraStreamPreset = useCallback(async (id: string, streamPreset: CameraStreamPresetKey | null, customStream?: CustomStream) => {
+    await fetch(`${API}/api/cameras/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ streamPreset, ...(customStream ? { customStream } : {}) }),
+    })
+    await fetchCameras()
+  }, [fetchCameras])
+
   const addCamera = useCallback(async (label: string, zone: string, rtsp: string) => {
     const res = await fetch(`${API}/api/cameras`, {
       method: 'POST',
@@ -297,7 +306,7 @@ export function useCameras() {
     loading, serverOk, recordings, diskPercent, recordingsSizeBytes,
     alerts, deleteAllAlerts, motionActive, startMotion, stopMotion,
     networkOk, repairingNetwork, repairNetwork,
-    addCamera, renameCamera, removeCamera, toggleCameraEnabled, toggleCameraMotion, setCameraMotionAction,
+    addCamera, renameCamera, removeCamera, toggleCameraEnabled, toggleCameraMotion, setCameraMotionAction, setCameraStreamPreset,
     startRecording, stopRecording,
     snapshotUrl, motionSnapshotUrl, fetchRecordings, deleteRecording, deleteAllRecordings, deleteAllSnapshots,
   }

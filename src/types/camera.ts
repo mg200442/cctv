@@ -1,5 +1,22 @@
 export type CameraStatus = 'online' | 'offline'
 
+// Live-view "Optimizar" presets — keys match src/shared/streamPresets.json
+export type StreamPresetKey = 'ahorro-max' | 'ahorro' | 'equilibrado' | 'calidad-max'
+
+// A camera's stream override is either one of the fixed global presets, or
+// 'custom' — manual width/height/fps/quality numbers (see CustomStream)
+// entered per-camera instead of picking a preset. Only per-camera overrides
+// can be 'custom'; the global default (Timeline's "Optimizar") always stays
+// one of the fixed StreamPresetKey values.
+export type CameraStreamPresetKey = StreamPresetKey | 'custom'
+
+export interface CustomStream {
+  width: number
+  height: number
+  q: number // ffmpeg -q:v — lower is better quality, 1 (best) to 31 (worst)
+  fps: number
+}
+
 export interface AiBox {
   x: number
   y: number
@@ -18,6 +35,8 @@ export interface ServerCamera {
   enabled: boolean
   motionEnabled?: boolean
   motionAction?: 'record' | 'snapshot'
+  streamPreset?: CameraStreamPresetKey // per-camera override; absent = inherit global preset
+  customStream?: CustomStream // only meaningful when streamPreset === 'custom'
   streaming: boolean
   live: boolean
   recording: boolean

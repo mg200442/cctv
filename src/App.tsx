@@ -14,9 +14,10 @@ import { SettingsModal } from '@/components/SettingsModal'
 import { RenameCameraModal } from '@/components/RenameCameraModal'
 import { useCameras } from '@/hooks/useCameras'
 import { useDetection } from '@/hooks/useDetection'
-import { DETECTION_CLASS_OPTIONS } from '@/types/camera'
+import { DETECTION_CLASS_OPTIONS, type StreamPresetKey } from '@/types/camera'
 
 const DEFAULT_MAX_STORAGE_GB = 10
+const DEFAULT_STREAM_PRESET: StreamPresetKey = 'equilibrado'
 
 function playAlertBeep() {
   try {
@@ -61,6 +62,14 @@ function loadMaxStorageGB(): number {
   return DEFAULT_MAX_STORAGE_GB
 }
 
+function loadStreamPreset(): StreamPresetKey {
+  try {
+    const v = localStorage.getItem('streamPreset')
+    if (v === 'ahorro-max' || v === 'ahorro' || v === 'equilibrado' || v === 'calidad-max') return v
+  } catch {}
+  return DEFAULT_STREAM_PRESET
+}
+
 function loadSoundEnabled(): boolean {
   try {
     const v = localStorage.getItem('alertSoundEnabled')
@@ -94,6 +103,7 @@ export default function App() {
 
   const [searchQuery, setSearchQuery] = useState('')
   const [maxStorageGB, setMaxStorageGB] = useState<number>(loadMaxStorageGB)
+  const [streamPreset, setStreamPreset] = useState<StreamPresetKey>(loadStreamPreset)
   const [soundEnabled, setSoundEnabled] = useState<boolean>(loadSoundEnabled)
   const [detectionClasses, setDetectionClasses] = useState<string[]>(loadDetectionClasses)
   const [renamingCameraId, setRenamingCameraId] = useState<string | null>(null)
@@ -101,7 +111,7 @@ export default function App() {
 
   const {
     cameras, selected, setSelected, serverOk, recordings, diskPercent,
-    recordingsSizeBytes, addCamera, renameCamera, removeCamera, toggleCameraEnabled, toggleCameraMotion, setCameraMotionAction,
+    recordingsSizeBytes, addCamera, renameCamera, removeCamera, toggleCameraEnabled, toggleCameraMotion, setCameraMotionAction, setCameraStreamPreset,
     startRecording, stopRecording, snapshotUrl, motionSnapshotUrl, deleteRecording, deleteAllRecordings, deleteAllSnapshots,
     alerts, deleteAllAlerts, motionActive, startMotion, stopMotion,
     networkOk, repairingNetwork, repairNetwork,
@@ -148,6 +158,26 @@ export default function App() {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission()
     }
+  }, [])
+
+  // Storage cap is authoritative server-side (the retention sweep runs
+  // independent of any open tab) — localStorage is just an instant-load
+  // cache to avoid a flash of the default value; reconcile with the server
+  // once it answers.
+  useEffect(() => {
+    fetch('/api/settings')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data && typeof data.maxStorageGB === 'number') {
+          setMaxStorageGB(data.maxStorageGB)
+          try { localStorage.setItem('maxStorageGB', String(data.maxStorageGB)) } catch {}
+        }
+        if (data && typeof data.streamPreset === 'string') {
+          setStreamPreset(data.streamPreset)
+          try { localStorage.setItem('streamPreset', data.streamPreset) } catch {}
+        }
+      })
+      .catch(() => {})
   }, [])
 
   // Alert notifications when a new recording appears
@@ -225,6 +255,24 @@ export default function App() {
   const handleSaveSettings = useCallback((gb: number) => {
     setMaxStorageGB(gb)
     try { localStorage.setItem('maxStorageGB', String(gb)) } catch {}
+    // Persisted server-side too — the storage retention sweep runs even
+    // with no browser tab open, so it needs this value independent of
+    // localStorage.
+    fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxStorageGB: gb }),
+    }).catch(() => {})
+  }, [])
+
+  const handleSaveStreamPreset = useCallback((key: StreamPresetKey) => {
+    setStreamPreset(key)
+    try { localStorage.setItem('streamPreset', key) } catch {}
+    fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ streamPreset: key }),
+    }).catch(() => {})
   }, [])
 
   const toggleSound = useCallback(() => {
@@ -327,6 +375,7 @@ export default function App() {
                   if (cam) toggleCameraMotion(id, cam.motionEnabled === false)
                 }}
                 onSetMotionAction={(id, action) => setCameraMotionAction(id, action)}
+                onSetCameraStreamPreset={(id, key, customStream) => setCameraStreamPreset(id, key, customStream)}
               />
               <RightRail
                 alerts={alerts}
@@ -382,6 +431,9 @@ export default function App() {
           recordings={focusedRecordings}
           alerts={focusedAlerts}
           recording={activeRecordings > 0}
+          cameras={cameras}
+          streamPreset={streamPreset}
+          onSetStreamPreset={handleSaveStreamPreset}
         />
       </div>
 

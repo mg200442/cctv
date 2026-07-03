@@ -24,6 +24,7 @@ El usuario `openclaw` no tiene sudo — el admin es `air`, pero el diálogo GUI 
 npm run dev:all   # Vite (:5173) + servidor proxy (:3001) en paralelo — desarrollo
 npm start         # build + node server.js — producción, un solo puerto (:3001)
 npm run typecheck # tsc --noEmit
+npm test          # node --test — arranca server.js real (aislado vía CCTV_DATA_DIR) y prueba contra HTTP
 ```
 
 ## Referencia rápida
@@ -84,8 +85,20 @@ Cada alerta de movimiento puede mandar automáticamente una foto a Telegram (usa
 
 Al arrancar, si están las dos variables, el log muestra `Telegram alerts: enabled`. El envío es "fire-and-forget" (no bloquea el tick de detección de movimiento de ninguna cámara) y usa el mismo cooldown de 60s por cámara que ya limita las alertas — no hay spam adicional que vigilar.
 
+## Autenticación (opcional)
+
+Sin login por defecto — cualquiera en la red que llegue al puerto puede ver cámaras en directo, borrar grabaciones, etc. Para exigir usuario/contraseña (HTTP Basic — el propio navegador muestra el diálogo, sin pantalla de login que mantener):
+
+1. En `.env`, define `AUTH_USER` y `AUTH_PASS`.
+2. Reinicia el servidor — el log muestra `Auth: enabled (HTTP Basic)` si están las dos.
+3. Protege **todo**, incluidos los ficheros estáticos (`dist/`, grabaciones, snapshots) — el middleware corre antes que cualquier ruta.
+
+Comparación usuario/contraseña con `crypto.timingSafeEqual` (no `===`), para no filtrar por timing cuánto de la contraseña acertaste. Sin las dos variables, comportamiento idéntico a antes (sin login).
+
 ## Decisiones no obvias
 
+- **Preset de calidad "PERSONALIZADO" por cámara (`streamPreset: 'custom'` + `customStream`)**: solo existe a nivel de cámara, no como opción global — el "Optimizar" del footer del Timeline siempre es uno de los 4 presets fijos de `streamPresets.json`. `camera.customStream` guarda `{width, height, q, fps}` validados contra `CUSTOM_STREAM_BOUNDS` en `server.js` (160–3840px de ancho, 120–2160px de alto, fps 1–30, calidad `q` 1–31 donde 1 es mejor calidad en `-q:v` de ffmpeg) — los mismos límites se repiten en el formulario del frontend (`CameraCard.tsx`) solo para deshabilitar el botón "APLICAR" antes de tiempo; la validación real y la que importa es la del servidor. Elegir `streamPreset: null` limpia también `customStream` (no se queda huérfano por si se vuelve a elegir "PERSONALIZADO" más tarde con datos viejos).
+- **Los tests (`tests/api.test.mjs`) arrancan el `server.js` real como proceso hijo, no importan sus funciones.** El fichero tiene demasiados efectos secundarios a nivel de módulo (resolución de ffmpeg, alias de red, `mkdirSync`) para trocearlo cómodamente en unidades importables sin reescribirlo. En vez de eso, cada suite lanza `node server.js` con `CCTV_DATA_DIR` apuntando a un directorio temporal aislado (nunca toca `cameras.json`/`recordings/` reales) y `CCTV_SKIP_NET_SETUP=1`, y prueba contra HTTP real — automatiza exactamente el mismo patrón de verificación manual con `curl` que ya se usaba en toda la sesión de desarrollo. `node --test tests/` (con la barra) falla con `MODULE_NOT_FOUND` en Node 26 — usar `node --test` a secas (auto-descubre `**/*.test.mjs`) o apuntar al fichero exacto.
 - **JPEG polling, no MJPEG**: Safari no soporta `multipart/x-mixed-replace` en `<img>`. El servidor guarda el último frame en memoria (`latestFrame`) y el frontend hace polling a `/snapshot/:id?t=timestamp` cada ~150ms. No volver a MJPEG para el feed del navegador.
 - **`AGENTS.md`** en la raíz es de una fase anterior del proyecto (scaffolding con OpenCode, antes de que existiera código de aplicación) y está desactualizado — no lo uses como referencia del estado actual del repo.
 - **`testRtsp()` usa `-loglevel info`, no `error`** — la línea `Stream ... Video:` que se busca en `stderr` solo se emite a nivel `info`; con `error` la verificación (botón "Probar conexión" y el campo `verified` del discovery) siempre fallaba en silencio, incluso con streams que funcionaban perfectamente. No bajar el loglevel sin comprobar que el grep sigue encontrando la línea.

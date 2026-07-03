@@ -10,7 +10,7 @@ const NAV_ITEMS: NavItem[] = [
   { icon: LayoutGrid, label: 'EN VIVO', view: 'live' },
   { icon: Clapperboard, label: 'REC', view: 'rec' },
   { icon: Bell, label: 'ALERTAS', view: 'alertas' },
-  { icon: Activity, label: 'IA', view: 'ia' },
+  { icon: Activity, label: 'ANÁLISIS', view: 'ia' },
   { icon: MapPin, label: 'MAPA', view: 'mapa' },
   { icon: Cctv, label: 'EQUIPOS', view: 'equipos' },
 ]

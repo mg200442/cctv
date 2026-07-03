@@ -5,6 +5,7 @@ snapshots/
 detection-frames/
 alerts.json
 detections.json
+settings.json
 tsconfig.tsbuildinfo
 .DS_Store
 .env

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { SlidersHorizontal, Maximize2, Minimize2, LayoutGrid, ChevronUp, ChevronDown } from 'lucide-react'
-import type { Camera } from '@/types/camera'
+import type { Camera, CameraStreamPresetKey, CustomStream } from '@/types/camera'
 import { CameraCard } from './CameraCard'
 import { CameraSlot } from './CameraSlot'
 
@@ -33,12 +33,13 @@ interface Props {
   onTogglePause: (id: string) => void
   onToggleMotionEnabled: (id: string) => void
   onSetMotionAction: (id: string, action: 'record' | 'snapshot') => void
+  onSetCameraStreamPreset: (id: string, key: CameraStreamPresetKey | null, customStream?: CustomStream) => void
   onFullscreen: (i: number) => void
 }
 
 export function CameraGrid({
   cameras, selected, playbackCameraId, now, snapshotUrl, motionActive,
-  onSelect, onAddClick, onStartRec, onStopRec, onShowRecs, onRename, onRemove, onTogglePause, onToggleMotionEnabled, onSetMotionAction, onFullscreen,
+  onSelect, onAddClick, onStartRec, onStopRec, onShowRecs, onRename, onRemove, onTogglePause, onToggleMotionEnabled, onSetMotionAction, onSetCameraStreamPreset, onFullscreen,
 }: Props) {
   const [focusMode, setFocusMode] = useState(false)
   const [gridCols, setGridCols] = useState(() => {
@@ -200,6 +201,7 @@ export function CameraGrid({
               onTogglePause={() => onTogglePause(focusCam.id)}
               onToggleMotionEnabled={() => onToggleMotionEnabled(focusCam.id)}
               onSetMotionAction={action => onSetMotionAction(focusCam.id, action)}
+              onSetStreamPreset={(key, customStream) => onSetCameraStreamPreset(focusCam.id, key, customStream)}
             />
           </div>
 
@@ -261,6 +263,7 @@ export function CameraGrid({
                       onTogglePause={() => onTogglePause(cam.id)}
                       onToggleMotionEnabled={() => onToggleMotionEnabled(cam.id)}
                       onSetMotionAction={action => onSetMotionAction(cam.id, action)}
+                      onSetStreamPreset={(key, customStream) => onSetCameraStreamPreset(cam.id, key, customStream)}
                     />
                   </div>
                 )
@@ -303,6 +306,7 @@ export function CameraGrid({
                   onTogglePause={() => onTogglePause(cam.id)}
                   onToggleMotionEnabled={() => onToggleMotionEnabled(cam.id)}
                   onSetMotionAction={action => onSetMotionAction(cam.id, action)}
+                  onSetStreamPreset={(key, customStream) => onSetCameraStreamPreset(cam.id, key, customStream)}
                 />
               )
             }
