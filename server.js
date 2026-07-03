@@ -33,6 +33,7 @@ const DATA_DIR = process.env.CCTV_DATA_DIR || __dirname
 const RECORDINGS_DIR = join(DATA_DIR, 'recordings')
 const SNAPSHOTS_DIR = join(DATA_DIR, 'snapshots')
 const DETECTION_FRAMES_DIR = join(DATA_DIR, 'detection-frames')
+const THUMBNAILS_DIR = join(DATA_DIR, 'thumbnails')
 const CONFIG_FILE = join(DATA_DIR, 'cameras.json')
 const ALERTS_FILE = join(DATA_DIR, 'alerts.json')
 const DETECTIONS_FILE = join(DATA_DIR, 'detections.json')
@@ -47,6 +48,7 @@ const { presets: STREAM_PRESETS, default: DEFAULT_STREAM_PRESET } =
 mkdirSync(RECORDINGS_DIR, { recursive: true })
 mkdirSync(SNAPSHOTS_DIR, { recursive: true })
 mkdirSync(DETECTION_FRAMES_DIR, { recursive: true })
+mkdirSync(THUMBNAILS_DIR, { recursive: true })
 
 // --- ffmpeg resolution (portable across machines/OSes) ---
 // Order: explicit override → bundled static binary (ffmpeg-static, matches
@@ -247,6 +249,23 @@ function sendTelegramAlert(jpegBuffer, caption) {
     .catch(e => console.error('  ✗ Telegram alert failed:', e.message))
 }
 
+// Text-only variant (sendMessage, not sendPhoto) for events that don't have
+// a natural photo attached — a camera going offline/recovering, a finished
+// detection scan with no matching frame handy, or a storage-retention
+// summary. Same fire-and-forget/error-logging contract as sendTelegramAlert.
+function sendTelegramMessage(text) {
+  if (!TELEGRAM_ENABLED) return
+  fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: TELEGRAM_CHAT_ID, text }),
+  })
+    .then(async res => {
+      if (!res.ok) console.error(`  ✗ Telegram message failed (${res.status}):`, await res.text())
+    })
+    .catch(e => console.error('  ✗ Telegram message failed:', e.message))
+}
+
 // --- Active stream processes ---
 // entry: { proc, clients, latestFrame, lastFrameTime, lastRequestTime }
 const streams = new Map()
@@ -381,6 +400,51 @@ setInterval(() => {
     stopStream(id)
   }
 }, IDLE_SWEEP_INTERVAL_MS)
+
+// --- Camera online/offline Telegram notifications ---
+// Reuses the exact "live" computation GET /api/cameras already does
+// (fresh frame within STALE_FRAME_MS) rather than starting a stream just to
+// monitor it — a camera only gets watched here if something else (a live
+// view tab, motion detection) already has its ffmpeg process running.
+// Deliberately doesn't spawn new streams purely to poll reachability, since
+// that would mean extra always-on ffmpeg processes system-wide just for
+// this notification, which nobody asked for.
+//
+// Requires 2 consecutive identical readings before treating a change as a
+// real transition (not just one dropped/late frame at the sweep boundary),
+// and never alerts on the very first observation of a camera (that's just
+// establishing a baseline on startup, not a real transition).
+const CAMERA_STATUS_SWEEP_INTERVAL_MS = 30_000
+const cameraOnlineState = new Map() // cameraId -> { confirmed: boolean|null, lastReading: boolean|null }
+
+function checkCameraStatusTransitions() {
+  const now = Date.now()
+  const seenIds = new Set()
+  for (const camera of loadConfig()) {
+    if (!camera.enabled) continue // paused on purpose — no signal is expected, not worth a notification
+    seenIds.add(camera.id)
+    const entry = streams.get(camera.id)
+    const live = !!entry && !!entry.latestFrame && (now - entry.lastFrameTime) < STALE_FRAME_MS
+    const state = cameraOnlineState.get(camera.id) ?? { confirmed: null, lastReading: null }
+    if (state.lastReading === live && state.confirmed !== live) {
+      if (state.confirmed !== null) {
+        sendTelegramMessage(
+          live
+            ? `✅ ${camera.label} ha vuelto a estar en línea`
+            : `⚠️ ${camera.label} sin señal (${camera.zone || 'sin zona'})`
+        )
+      }
+      state.confirmed = live
+    }
+    state.lastReading = live
+    cameraOnlineState.set(camera.id, state)
+  }
+  // Drop tracking for cameras that got removed/disabled since the last sweep.
+  for (const id of cameraOnlineState.keys()) {
+    if (!seenIds.has(id)) cameraOnlineState.delete(id)
+  }
+}
+setInterval(checkCameraStatusTransitions, CAMERA_STATUS_SWEEP_INTERVAL_MS)
 
 // --- Motion detection ---
 // Frame-differencing motion detector (not object classification — that's a
@@ -1213,13 +1277,19 @@ function enforceRetention() {
     try {
       unlinkSync(join(f.dir, f.name))
       removeDetectionForFile(f.name)
-      if (f.dir === RECORDINGS_DIR) recordingMetaCache.delete(f.name)
+      if (f.dir === RECORDINGS_DIR) { recordingMetaCache.delete(f.name); removeThumbnailForFile(f.name) }
       total -= f.size
       freedBytes += f.size
       deleted++
     } catch {}
   }
-  if (deleted > 0) console.log(`  Storage retention: freed ${(freedBytes / 1024 / 1024).toFixed(0)}MB, deleted ${deleted} file(s)`)
+  if (deleted > 0) {
+    console.log(`  Storage retention: freed ${(freedBytes / 1024 / 1024).toFixed(0)}MB, deleted ${deleted} file(s)`)
+    // Same message whether this ran from the periodic sweep or the manual
+    // "FORZAR LIMPIEZA AHORA" button in Settings (both call this function) —
+    // a manual run still deleting real files is worth knowing about too.
+    sendTelegramMessage(`🗑️ Limpieza de almacenamiento: liberados ${(freedBytes / 1024 / 1024).toFixed(0)}MB, ${deleted} archivo(s) borrado(s)`)
+  }
   return { deleted, freedBytes }
 }
 
@@ -1243,7 +1313,7 @@ app.delete('/api/recordings', (_req, res) => {
     for (const name of readdirSync(RECORDINGS_DIR)) {
       if (!name.endsWith('.mp4')) continue
       if (activeFiles.has(name)) { skipped++; continue }
-      try { unlinkSync(join(RECORDINGS_DIR, name)); recordingMetaCache.delete(name); removeDetectionForFile(name); deleted++ } catch { skipped++ }
+      try { unlinkSync(join(RECORDINGS_DIR, name)); recordingMetaCache.delete(name); removeDetectionForFile(name); removeThumbnailForFile(name); deleted++ } catch { skipped++ }
     }
   } catch {}
   res.json({ ok: true, deleted, skipped })
@@ -1261,6 +1331,7 @@ app.delete(/^\/api\/recordings\/(.+)$/, (req, res) => {
     unlinkSync(file)
     recordingMetaCache.delete(filename)
     removeDetectionForFile(filename)
+    removeThumbnailForFile(filename)
     res.json({ ok: true })
   } catch {
     res.status(500).json({ error: 'Could not delete file' })
@@ -1272,6 +1343,45 @@ app.get('/recordings/:file', (req, res) => {
   const file = join(RECORDINGS_DIR, req.params.file)
   if (!existsSync(file)) return res.status(404).send('Not found')
   res.sendFile(file)
+})
+
+// Thumbnail for a recording — generated once via ffmpeg (grab a frame ~1s
+// in, downscaled) and cached to THUMBNAILS_DIR; every request after the
+// first just serves the cached JPEG directly, no repeated ffmpeg spawn.
+// Regex route for the same reason as the DELETE route above (Express 5
+// :param doesn't match the dot in "cam-01_....mp4").
+app.get(/^\/api\/recordings\/(.+)\/thumbnail$/, async (req, res) => {
+  const filename = decodeURIComponent(req.params[0])
+  if (!filename.endsWith('.mp4') || filename.includes('/') || filename.includes('..')) {
+    return res.status(400).json({ error: 'Invalid filename' })
+  }
+  const source = join(RECORDINGS_DIR, filename)
+  if (!existsSync(source)) return res.status(404).json({ error: 'Not found' })
+  const thumb = join(THUMBNAILS_DIR, filename.replace(/\.mp4$/, '.jpg'))
+  const sendThumb = () => res.type('jpeg').send(readFileSync(thumb))
+  if (existsSync(thumb)) return sendThumb()
+  // -ss before -i seeks fast (keyframe-ish, no full decode from 0) — fine
+  // for a thumbnail, not for anything needing frame accuracy. Seeking to 1s
+  // fails on a recording shorter than that (manual REC stopped almost
+  // immediately, or a snapshot-mode clip) — falls back to grabbing whatever
+  // frame is at 0 rather than surfacing a 500 for what's a normal case.
+  async function grabFrame(seekSeconds) {
+    await execAsync(
+      `"${FFMPEG}" -loglevel error -ss ${seekSeconds} -i "${source}" -frames:v 1 -q:v 4 -vf scale=200:-1 -y "${thumb}"`,
+      { timeout: 8000 }
+    )
+    if (!existsSync(thumb)) throw new Error('ffmpeg produced no output')
+  }
+  try {
+    try {
+      await grabFrame(1)
+    } catch {
+      await grabFrame(0)
+    }
+    sendThumb()
+  } catch {
+    res.status(500).json({ error: 'Could not generate thumbnail' })
+  }
 })
 
 // ─── Snapshots (motion-detection "snapshot" action — mirrors recordings) ────────
@@ -1384,6 +1494,13 @@ function removeDetectionForFile(name) {
   saveDetections(detections)
 }
 
+// Same idea as removeDetectionForFile, for the on-demand thumbnail cache
+// below — a stale thumbnail left behind after its recording is deleted
+// would just be dead weight on disk (harmless but pointless to keep).
+function removeThumbnailForFile(name) {
+  try { unlinkSync(join(THUMBNAILS_DIR, name.replace(/\.mp4$/, '.jpg'))) } catch {}
+}
+
 // Decode a JPEG straight to an int32 RGB tensor — coco-ssd wants this shape
 // (H, W, 3) with plain 0-255 pixel values. jpeg-js decodes to RGBA; drop the
 // alpha channel (same decode approach as decodeGraySmall for motion
@@ -1482,6 +1599,12 @@ async function runDetectionBatch() {
       ...snapshotFiles.filter(f => !detections[f]).map(f => ({ name: f, kind: 'snapshot' })),
     ]
     detectionJob.total = todo.length
+    // Tracked across the loop so the "scan finished" Telegram notification
+    // below can report totals and attach the single most-confident hit as
+    // the photo, instead of sending one message per file (that would be
+    // spam for a batch of dozens of recordings).
+    let hitsFound = 0
+    let bestHit = null // { class, score, frame, kind }
 
     for (const item of todo) {
       if (detectionJob.cancel) break
@@ -1497,12 +1620,30 @@ async function runDetectionBatch() {
           classes = preds.map(p => ({ ...p, frame: item.name }))
         }
         detections[item.name] = { kind: item.kind, classes, scannedAt: new Date().toISOString() }
+        for (const c of classes) {
+          hitsFound++
+          if (!bestHit || c.score > bestHit.score) bestHit = { ...c, kind: item.kind }
+        }
       } catch (e) {
         console.error(`  Object detection failed for ${item.name}:`, e.message)
         detections[item.name] = { kind: item.kind, classes: [], scannedAt: new Date().toISOString(), error: true }
       }
       saveDetections(detections) // incremental — a cancelled/crashed run doesn't lose completed work
       detectionJob.done++
+    }
+
+    // Silent when cancelled or when nothing new was found — this batch only
+    // scans files not already analyzed, so a routine re-click with nothing
+    // new to scan shouldn't ping Telegram every time.
+    if (!detectionJob.cancel && hitsFound > 0) {
+      const summary = `🔍 Análisis completado: ${hitsFound} detección${hitsFound !== 1 ? 'es' : ''} en ${todo.length} archivo${todo.length !== 1 ? 's' : ''} nuevos`
+      let photoBuf = null
+      try {
+        const dir = bestHit.kind === 'snapshot' ? SNAPSHOTS_DIR : DETECTION_FRAMES_DIR
+        photoBuf = readFileSync(join(dir, bestHit.frame))
+      } catch {}
+      if (photoBuf) sendTelegramAlert(photoBuf, summary)
+      else sendTelegramMessage(summary)
     }
   } finally {
     detectionJob.running = false

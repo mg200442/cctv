@@ -14,6 +14,7 @@ import { SettingsModal } from '@/components/SettingsModal'
 import { RenameCameraModal } from '@/components/RenameCameraModal'
 import { useCameras } from '@/hooks/useCameras'
 import { useDetection } from '@/hooks/useDetection'
+import { useLayoutMode } from '@/hooks/useLayoutMode'
 import { DETECTION_CLASS_OPTIONS, type StreamPresetKey } from '@/types/camera'
 
 const DEFAULT_MAX_STORAGE_GB = 10
@@ -87,6 +88,8 @@ function loadDetectionClasses(): string[] {
 }
 
 export default function App() {
+  const layoutMode = useLayoutMode()
+  const isMobile = layoutMode === 'mobile'
   const [now, setNow] = useState(new Date())
   const [showAddModal, setShowAddModal] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
@@ -322,15 +325,23 @@ export default function App() {
     ? (cameras.find(c => c.id === cameraRecsId)?.label ?? cameraRecsId)
     : ''
 
+  // On mobile the sidebar becomes a bottom tab bar (see Sidebar.tsx), so it
+  // has to come after the main content in a column flex, not before it in a
+  // row — same component, just reordered/reoriented by the shell around it.
+  const sidebar = (
+    <Sidebar activeView={sidebarActiveView} alertsBadge={alertsBadge} recBadge={recBadge} onNav={handleNav} onOpenSettings={() => setShowSettings(true)} />
+  )
+
   return (
     <div style={{
       width: '100vw', height: '100vh', background: '#08090A',
       color: '#ECE8E1', fontFamily: "'DM Mono', monospace",
-      display: 'flex', overflow: 'hidden', position: 'relative',
+      display: 'flex', flexDirection: isMobile ? 'column' : 'row',
+      overflow: 'hidden', position: 'relative',
     }}>
-      <Sidebar activeView={sidebarActiveView} alertsBadge={alertsBadge} recBadge={recBadge} onNav={handleNav} onOpenSettings={() => setShowSettings(true)} />
+      {!isMobile && sidebar}
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
         <Header
           now={now}
           serverOk={serverOk}
@@ -436,6 +447,8 @@ export default function App() {
           onSetStreamPreset={handleSaveStreamPreset}
         />
       </div>
+
+      {isMobile && sidebar}
 
       {/* Modals */}
       {showAddModal && (

@@ -1,4 +1,5 @@
-import { ShieldCheck, LayoutGrid, Clapperboard, Bell, Activity, MapPin, Cctv, Settings } from 'lucide-react'
+import { ShieldCheck, LayoutGrid, Clapperboard, Bell, Activity, Settings } from 'lucide-react'
+import { useLayoutMode } from '@/hooks/useLayoutMode'
 
 type NavItem = {
   icon: React.ElementType
@@ -6,13 +7,15 @@ type NavItem = {
   view: string
 }
 
+// "MAPA" and "EQUIPOS" removed — neither ever had real content behind it
+// (selecting either just fell through to the RecPanel by accident, see
+// App.tsx's view switch), and they were dead weight on mobile where every
+// nav slot competes for very little width.
 const NAV_ITEMS: NavItem[] = [
   { icon: LayoutGrid, label: 'EN VIVO', view: 'live' },
   { icon: Clapperboard, label: 'REC', view: 'rec' },
   { icon: Bell, label: 'ALERTAS', view: 'alertas' },
   { icon: Activity, label: 'ANÁLISIS', view: 'ia' },
-  { icon: MapPin, label: 'MAPA', view: 'mapa' },
-  { icon: Cctv, label: 'EQUIPOS', view: 'equipos' },
 ]
 
 interface Props {
@@ -24,6 +27,74 @@ interface Props {
 }
 
 export function Sidebar({ activeView, alertsBadge, recBadge, onNav, onOpenSettings }: Props) {
+  const layoutMode = useLayoutMode()
+  const isMobile = layoutMode === 'mobile'
+
+  const navButtons = NAV_ITEMS.map(({ icon: Icon, label, view }) => {
+    const active = activeView === view
+    const badge = view === 'alertas' ? alertsBadge : view === 'rec' ? recBadge : undefined
+    return (
+      <button
+        key={label}
+        onClick={() => onNav(view)}
+        style={{
+          position: 'relative',
+          width: isMobile ? '100%' : 56, height: isMobile ? 48 : 56,
+          flex: isMobile ? 1 : undefined,
+          borderRadius: 12,
+          border: active ? '2px solid #E07820' : '2px solid #20242A',
+          background: active ? '#1A130A' : 'transparent',
+          color: active ? '#E07820' : '#7E858C',
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          justifyContent: 'center', gap: 3, cursor: 'pointer',
+        }}
+      >
+        <Icon size={20} />
+        <span style={{ fontSize: 7, letterSpacing: '.06em', fontFamily: 'inherit' }}>{label}</span>
+        {badge !== undefined && badge > 0 && (
+          <span style={{
+            position: 'absolute', top: 4, right: isMobile ? '18%' : 8, width: 16, height: 16,
+            borderRadius: '50%', background: '#FF5247', color: '#fff',
+            fontSize: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: '1px solid #08090A',
+          }}>
+            {badge}
+          </span>
+        )}
+      </button>
+    )
+  })
+
+  // Bottom tab bar on mobile — nav items only (Settings moves into the
+  // Header's overflow on mobile isn't wired up yet; simplest safe option
+  // for now is keeping the gear reachable as one more tab here rather than
+  // dropping it silently).
+  if (isMobile) {
+    return (
+      <nav style={{
+        width: '100%', flexShrink: 0, background: '#0E1012',
+        borderTop: '2px solid #20242A', display: 'flex',
+        alignItems: 'center', gap: 6, padding: '6px 8px',
+        // Clears the iOS home-indicator / gesture area so the bar isn't
+        // half-covered on notched phones.
+        paddingBottom: 'max(6px, env(safe-area-inset-bottom))',
+      }}>
+        {navButtons}
+        <button
+          onClick={onOpenSettings}
+          title="Configuración"
+          style={{
+            width: 48, height: 48, borderRadius: 12, border: '2px solid #20242A',
+            background: 'transparent', color: '#7E858C', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+          }}
+        >
+          <Settings size={18} />
+        </button>
+      </nav>
+    )
+  }
+
   return (
     <aside style={{
       width: 84, flexShrink: 0, background: '#0E1012',
@@ -49,37 +120,7 @@ export function Sidebar({ activeView, alertsBadge, recBadge, onNav, onOpenSettin
 
       {/* Nav */}
       <nav style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', width: '100%' }}>
-        {NAV_ITEMS.map(({ icon: Icon, label, view }) => {
-          const active = activeView === view
-          const badge = view === 'alertas' ? alertsBadge : view === 'rec' ? recBadge : undefined
-          return (
-            <button
-              key={label}
-              onClick={() => onNav(view)}
-              style={{
-                position: 'relative', width: 56, height: 56, borderRadius: 12,
-                border: active ? '2px solid #E07820' : '2px solid #20242A',
-                background: active ? '#1A130A' : 'transparent',
-                color: active ? '#E07820' : '#7E858C',
-                display: 'flex', flexDirection: 'column', alignItems: 'center',
-                justifyContent: 'center', gap: 3, cursor: 'pointer',
-              }}
-            >
-              <Icon size={20} />
-              <span style={{ fontSize: 7, letterSpacing: '.06em', fontFamily: 'inherit' }}>{label}</span>
-              {badge !== undefined && badge > 0 && (
-                <span style={{
-                  position: 'absolute', top: 6, right: 8, width: 16, height: 16,
-                  borderRadius: '50%', background: '#FF5247', color: '#fff',
-                  fontSize: 8, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  border: '1px solid #08090A',
-                }}>
-                  {badge}
-                </span>
-              )}
-            </button>
-          )
-        })}
+        {navButtons}
       </nav>
 
       {/* Bottom */}

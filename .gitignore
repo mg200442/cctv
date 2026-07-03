@@ -3,6 +3,7 @@ dist/
 recordings/
 snapshots/
 detection-frames/
+thumbnails/
 alerts.json
 detections.json
 settings.json

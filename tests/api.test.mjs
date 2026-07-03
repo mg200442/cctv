@@ -13,11 +13,12 @@
 // the server to be importable.
 import { test, describe, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ffmpegStatic from 'ffmpeg-static'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = join(__dirname, '..')
@@ -362,5 +363,55 @@ describe('HTTP Basic Auth (enabled)', () => {
       headers: { Authorization: 'Basic ' + Buffer.from('testadmin:testpass123').toString('base64') },
     })
     assert.equal(res.status, 200)
+  })
+})
+
+describe('recording thumbnails', () => {
+  let server
+  before(async () => {
+    server = startServer(3094)
+    await waitForServer(server.baseUrl)
+  })
+  after(() => server.stop())
+
+  test('GET .../thumbnail generates a JPEG on first request, cached on the second, and rejects a bad filename', async () => {
+    const name = 'cam-01_2026-01-01T00-00-00.mp4'
+    const recDir = join(server.dataDir, 'recordings')
+    mkdirSync(recDir, { recursive: true })
+    // A real (if tiny) mp4 — the fake JPEG-magic-bytes fixture used
+    // elsewhere in this file is fine for delete-path tests that never open
+    // the file, but ffmpeg needs an actual decodable video to produce a
+    // thumbnail from.
+    execFileSync(ffmpegStatic, [
+      '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=64x64:d=1', '-frames:v', '1', '-y', join(recDir, name),
+    ], { stdio: 'ignore' })
+
+    let res = await fetch(`${server.baseUrl}/api/recordings/${encodeURIComponent(name)}/thumbnail`)
+    assert.equal(res.status, 200)
+    assert.match(res.headers.get('content-type') ?? '', /image\/jpeg/)
+    const firstBuf = Buffer.from(await res.arrayBuffer())
+    assert.ok(firstBuf.length > 0, 'thumbnail should be a non-empty JPEG')
+
+    const thumbFile = join(server.dataDir, 'thumbnails', name.replace('.mp4', '.jpg'))
+    assert.ok(existsSync(thumbFile), 'thumbnail should be cached to disk')
+
+    // Second request should serve the same cached file, not regenerate it.
+    res = await fetch(`${server.baseUrl}/api/recordings/${encodeURIComponent(name)}/thumbnail`)
+    assert.equal(res.status, 200)
+    const secondBuf = Buffer.from(await res.arrayBuffer())
+    assert.deepEqual(firstBuf, secondBuf)
+
+    // Deleting the recording should also drop its cached thumbnail.
+    res = await fetch(`${server.baseUrl}/api/recordings/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    assert.equal(res.status, 200)
+    assert.ok(!existsSync(thumbFile), 'thumbnail cache should be cleaned up when the recording is deleted')
+  })
+
+  test('GET .../thumbnail rejects a path-traversal filename and 404s on an unknown one', async () => {
+    let res = await fetch(`${server.baseUrl}/api/recordings/${encodeURIComponent('../../etc/passwd')}/thumbnail`)
+    assert.equal(res.status, 400)
+
+    res = await fetch(`${server.baseUrl}/api/recordings/${encodeURIComponent('does-not-exist.mp4')}/thumbnail`)
+    assert.equal(res.status, 404)
   })
 })

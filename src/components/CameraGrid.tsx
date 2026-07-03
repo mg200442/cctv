@@ -3,6 +3,7 @@ import { SlidersHorizontal, Maximize2, Minimize2, LayoutGrid, ChevronUp, Chevron
 import type { Camera, CameraStreamPresetKey, CustomStream } from '@/types/camera'
 import { CameraCard } from './CameraCard'
 import { CameraSlot } from './CameraSlot'
+import { useLayoutMode } from '@/hooks/useLayoutMode'
 
 const MAX_CAMERAS = 9
 
@@ -41,6 +42,9 @@ export function CameraGrid({
   cameras, selected, playbackCameraId, now, snapshotUrl, motionActive,
   onSelect, onAddClick, onStartRec, onStopRec, onShowRecs, onRename, onRemove, onTogglePause, onToggleMotionEnabled, onSetMotionAction, onSetCameraStreamPreset, onFullscreen,
 }: Props) {
+  const layoutMode = useLayoutMode()
+  const isMobile = layoutMode === 'mobile'
+  const isTablet = layoutMode === 'tablet'
   const [focusMode, setFocusMode] = useState(false)
   const [gridCols, setGridCols] = useState(() => {
     try { return parseInt(localStorage.getItem('gridCols') ?? '3') || 3 } catch { return 3 }
@@ -63,7 +67,13 @@ export function CameraGrid({
     return () => document.removeEventListener('mousedown', handler)
   }, [showPicker])
 
-  const totalSlots = gridCols * gridRows
+  // The stored gridCols/gridRows preference is a desktop concept (up to
+  // 4×4) — on tablet the fixed-width side panels already eat more of the
+  // screen proportionally, so cap at 2 columns regardless of what's saved.
+  // Mobile doesn't use this grid at all (see the dedicated stacked-column
+  // branch below), so it's irrelevant there.
+  const effectiveCols = isTablet ? Math.min(gridCols, 2) : gridCols
+  const totalSlots = effectiveCols * gridRows
   const focusCam = selected !== null ? cameras[selected] : undefined
   const currentPreset = `${gridCols}×${gridRows}`
 
@@ -75,91 +85,102 @@ export function CameraGrid({
       {/* Toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <span style={{ fontSize: 11, letterSpacing: '.12em', color: '#7E858C' }}>VISTA EN VIVO</span>
-        <span style={{ fontSize: 11, letterSpacing: '.12em', color: '#565C63' }}>·</span>
-        <span style={{ fontSize: 11, letterSpacing: '.12em', color: '#ECE8E1' }}>
-          FOCO: {focusCam?.zone ?? '—'}
-        </span>
+        {!isMobile && (
+          <>
+            <span style={{ fontSize: 11, letterSpacing: '.12em', color: '#565C63' }}>·</span>
+            <span style={{ fontSize: 11, letterSpacing: '.12em', color: '#ECE8E1' }}>
+              FOCO: {focusCam?.zone ?? '—'}
+            </span>
+          </>
+        )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          {/* Grid picker */}
-          <div ref={pickerRef} style={{ position: 'relative' }}>
-            <button
-              onClick={() => setShowPicker(s => !s)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 7,
-                padding: '7px 12px', borderRadius: 10, cursor: 'pointer',
-                border: showPicker ? '2px solid #E07820' : '2px solid #20242A',
-                background: showPicker ? '#1A130A' : '#0E1012',
-                color: showPicker ? '#E07820' : '#ECE8E1',
-                fontFamily: "'DM Mono',monospace", fontSize: 10,
-                letterSpacing: '.06em',
-              }}
-            >
-              <LayoutGrid size={14} />
-              {currentPreset}
+          {/* Grid picker — irrelevant on mobile, which always stacks a
+              single column regardless of this preference (see the dedicated
+              mobile branch below), so it's hidden there instead of offering
+              a control that visibly does nothing. */}
+          {!isMobile && (
+            <div ref={pickerRef} style={{ position: 'relative' }}>
+              <button
+                onClick={() => setShowPicker(s => !s)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 7,
+                  padding: '7px 12px', borderRadius: 10, cursor: 'pointer',
+                  border: showPicker ? '2px solid #E07820' : '2px solid #20242A',
+                  background: showPicker ? '#1A130A' : '#0E1012',
+                  color: showPicker ? '#E07820' : '#ECE8E1',
+                  fontFamily: "'DM Mono',monospace", fontSize: 10,
+                  letterSpacing: '.06em',
+                }}
+              >
+                <LayoutGrid size={14} />
+                {currentPreset}
+              </button>
+
+              {showPicker && (
+                <div style={{
+                  position: 'absolute', top: '100%', right: 0, marginTop: 6,
+                  background: '#0E1012', border: '2px solid #20242A', borderRadius: 12,
+                  padding: 12, zIndex: 50,
+                  display: 'flex', flexDirection: 'column', gap: 6,
+                  minWidth: 140,
+                }}>
+                  <span style={{ fontSize: 8, letterSpacing: '.14em', color: '#565C63', marginBottom: 4 }}>
+                    DISPOSICIÓN
+                  </span>
+                  {GRID_PRESETS.map(p => {
+                    const active = gridCols === p.cols && gridRows === p.rows
+                    return (
+                      <button
+                        key={p.label}
+                        onClick={() => {
+                          setGridCols(p.cols); setGridRows(p.rows); setShowPicker(false)
+                          try { localStorage.setItem('gridCols', String(p.cols)); localStorage.setItem('gridRows', String(p.rows)) } catch {}
+                        }}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10,
+                          padding: '7px 10px', borderRadius: 8, cursor: 'pointer',
+                          border: `1px solid ${active ? '#E07820' : '#20242A'}`,
+                          background: active ? '#1A130A' : 'transparent',
+                          color: active ? '#E07820' : '#C9C4BB',
+                          fontFamily: "'DM Mono',monospace", fontSize: 10,
+                          letterSpacing: '.06em', textAlign: 'left',
+                        }}
+                      >
+                        {/* Mini grid visual */}
+                        <div style={{
+                          display: 'grid',
+                          gridTemplateColumns: `repeat(${p.cols}, 1fr)`,
+                          gap: 2, width: p.cols * 7 + (p.cols - 1) * 2,
+                          flexShrink: 0,
+                        }}>
+                          {Array.from({ length: p.cols * Math.min(p.rows, 3) }, (_, i) => (
+                            <div key={i} style={{
+                              width: 7, height: 5, borderRadius: 1,
+                              background: active ? '#E07820' : '#3A3F47',
+                            }} />
+                          ))}
+                        </div>
+                        {p.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!isMobile && (
+            <button style={{
+              display: 'flex', alignItems: 'center', gap: 7,
+              padding: '7px 12px', border: '2px solid #20242A', borderRadius: 10,
+              background: '#0E1012', color: '#ECE8E1',
+              fontFamily: "'DM Mono',monospace", fontSize: 10,
+              letterSpacing: '.06em', cursor: 'pointer',
+            }}>
+              <SlidersHorizontal size={14} />
+              FILTROS
             </button>
-
-            {showPicker && (
-              <div style={{
-                position: 'absolute', top: '100%', right: 0, marginTop: 6,
-                background: '#0E1012', border: '2px solid #20242A', borderRadius: 12,
-                padding: 12, zIndex: 50,
-                display: 'flex', flexDirection: 'column', gap: 6,
-                minWidth: 140,
-              }}>
-                <span style={{ fontSize: 8, letterSpacing: '.14em', color: '#565C63', marginBottom: 4 }}>
-                  DISPOSICIÓN
-                </span>
-                {GRID_PRESETS.map(p => {
-                  const active = gridCols === p.cols && gridRows === p.rows
-                  return (
-                    <button
-                      key={p.label}
-                      onClick={() => {
-                        setGridCols(p.cols); setGridRows(p.rows); setShowPicker(false)
-                        try { localStorage.setItem('gridCols', String(p.cols)); localStorage.setItem('gridRows', String(p.rows)) } catch {}
-                      }}
-                      style={{
-                        display: 'flex', alignItems: 'center', gap: 10,
-                        padding: '7px 10px', borderRadius: 8, cursor: 'pointer',
-                        border: `1px solid ${active ? '#E07820' : '#20242A'}`,
-                        background: active ? '#1A130A' : 'transparent',
-                        color: active ? '#E07820' : '#C9C4BB',
-                        fontFamily: "'DM Mono',monospace", fontSize: 10,
-                        letterSpacing: '.06em', textAlign: 'left',
-                      }}
-                    >
-                      {/* Mini grid visual */}
-                      <div style={{
-                        display: 'grid',
-                        gridTemplateColumns: `repeat(${p.cols}, 1fr)`,
-                        gap: 2, width: p.cols * 7 + (p.cols - 1) * 2,
-                        flexShrink: 0,
-                      }}>
-                        {Array.from({ length: p.cols * Math.min(p.rows, 3) }, (_, i) => (
-                          <div key={i} style={{
-                            width: 7, height: 5, borderRadius: 1,
-                            background: active ? '#E07820' : '#3A3F47',
-                          }} />
-                        ))}
-                      </div>
-                      {p.label}
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-
-          <button style={{
-            display: 'flex', alignItems: 'center', gap: 7,
-            padding: '7px 12px', border: '2px solid #20242A', borderRadius: 10,
-            background: '#0E1012', color: '#ECE8E1',
-            fontFamily: "'DM Mono',monospace", fontSize: 10,
-            letterSpacing: '.06em', cursor: 'pointer',
-          }}>
-            <SlidersHorizontal size={14} />
-            FILTROS
-          </button>
+          )}
 
           <button
             onClick={() => setFocusMode(f => !f)}
@@ -174,16 +195,22 @@ export function CameraGrid({
             }}
           >
             {focusMode ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-            {focusMode ? 'GRID' : 'FOCO'}
+            {!isMobile && (focusMode ? 'GRID' : 'FOCO')}
           </button>
         </div>
       </div>
 
       {/* ── FOCUS MODE ── */}
       {focusMode && focusCam ? (
-        <div style={{ flex: 1, display: 'flex', gap: 12, minHeight: 0 }}>
-          {/* Main camera — 70% */}
-          <div style={{ flex: 7, minHeight: 0 }}>
+        <div style={{
+          flex: 1, display: 'flex', flexDirection: isMobile ? 'column' : 'row',
+          gap: 12, minHeight: 0,
+        }}>
+          {/* Main camera — 70% on desktop/tablet; a fixed 16:9 box on
+              mobile, where the two panes stack instead of sitting side by
+              side (a 70/30 horizontal split has no usable width to give
+              either pane on a phone). */}
+          <div style={{ flex: isMobile ? 'none' : 7, minHeight: 0, aspectRatio: isMobile ? '16/9' : undefined }}>
             <CameraCard
               camera={focusCam}
               isPlayback={playbackCameraId === focusCam.id}
@@ -205,8 +232,10 @@ export function CameraGrid({
             />
           </div>
 
-          {/* Thumbnail strip — 30% */}
-          <div style={{ flex: 3, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          {/* Thumbnail strip — 30% on desktop/tablet (vertical list), the
+              remaining space on mobile (horizontal scroll row instead —
+              see the scrollable list below) */}
+          <div style={{ flex: isMobile ? 1 : 3, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             {/* Nav controls */}
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -241,12 +270,24 @@ export function CameraGrid({
               </div>
             </div>
 
-            {/* Scrollable list — main camera excluded */}
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto' }}>
+            {/* Scrollable list — main camera excluded. Vertical column on
+                desktop/tablet, horizontal row on mobile (there's no vertical
+                room left once the 16:9 main camera box above takes its
+                share). */}
+            <div style={{
+              flex: 1, display: 'flex',
+              flexDirection: isMobile ? 'row' : 'column',
+              gap: 8, overflow: 'auto',
+            }}>
               {cameras.map((cam, i) => {
                 if (i === selected) return null
                 return (
-                  <div key={cam.id} style={{ flexShrink: 0, height: 110 }}>
+                  <div
+                    key={cam.id}
+                    style={isMobile
+                      ? { flexShrink: 0, width: 150, aspectRatio: '16/9' }
+                      : { flexShrink: 0, height: 110 }}
+                  >
                     <CameraCard
                       camera={cam}
                       isPlayback={playbackCameraId === cam.id}
@@ -269,18 +310,55 @@ export function CameraGrid({
                 )
               })}
               {cameras.length < MAX_CAMERAS && (
-                <div style={{ flexShrink: 0, height: 110 }}>
+                <div style={isMobile ? { flexShrink: 0, width: 150, aspectRatio: '16/9' } : { flexShrink: 0, height: 110 }}>
                   <CameraSlot onAdd={onAddClick} />
                 </div>
               )}
             </div>
           </div>
         </div>
+      ) : isMobile ? (
+        /* ── MOBILE: single scrollable column ── */
+        // A CSS grid with `1fr` rows squishes every card to fit the
+        // viewport height regardless of content — fine on desktop with 2-4
+        // rows, useless on a phone with up to 9 cameras. A plain scrollable
+        // flex column with each card at a fixed 16:9 lets every camera size
+        // itself naturally instead of getting crushed.
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {cameras.map((cam, i) => (
+            <div key={cam.id} style={{ flexShrink: 0, aspectRatio: '16/9' }}>
+              <CameraCard
+                camera={cam}
+                isPlayback={playbackCameraId === cam.id}
+                isSelected={i === selected}
+                now={now}
+                snapshotUrl={snapshotUrl(cam.id)}
+                motionActive={motionActive}
+                onSelect={() => onSelect(i)}
+                onFullscreen={() => onFullscreen(i)}
+                onStartRec={() => onStartRec(cam.id)}
+                onStopRec={() => onStopRec(cam.id)}
+                onShowRecs={() => onShowRecs(cam.id)}
+                onRename={() => onRename(cam.id)}
+                onRemove={() => onRemove(cam.id)}
+                onTogglePause={() => onTogglePause(cam.id)}
+                onToggleMotionEnabled={() => onToggleMotionEnabled(cam.id)}
+                onSetMotionAction={action => onSetMotionAction(cam.id, action)}
+                onSetStreamPreset={(key, customStream) => onSetCameraStreamPreset(cam.id, key, customStream)}
+              />
+            </div>
+          ))}
+          {cameras.length < MAX_CAMERAS && (
+            <div style={{ flexShrink: 0, aspectRatio: '16/9' }}>
+              <CameraSlot onAdd={onAddClick} />
+            </div>
+          )}
+        </div>
       ) : (
-        /* ── GRID MODE ── */
+        /* ── GRID MODE (desktop/tablet) ── */
         <div style={{
           flex: 1, display: 'grid',
-          gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
+          gridTemplateColumns: `repeat(${effectiveCols}, 1fr)`,
           gridTemplateRows: `repeat(${gridRows}, 1fr)`,
           gap: 12, minHeight: 0,
         }}>

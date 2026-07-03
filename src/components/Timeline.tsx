@@ -1,12 +1,20 @@
 import { useState, useCallback, useMemo } from 'react'
-import { Play, SkipBack, SkipForward, Download, Gauge, X, Video, Radar, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Play, SkipBack, SkipForward, Download, Gauge, X, Video, ChevronLeft, ChevronRight } from 'lucide-react'
 import type { Recording } from '@/hooks/useCameras'
 import type { Alert, Camera, CameraStreamPresetKey, StreamPresetKey } from '@/types/camera'
 import { VideoPlayer } from './VideoPlayer'
 import streamPresets from '@/shared/streamPresets.json'
 import { streamPresetLabel } from '@/shared/streamPresetLabel'
+import { useLayoutMode } from '@/hooks/useLayoutMode'
 
 const ACCENT = '#E07820'
+
+// Same tone→color scheme RightRail.tsx's TONE_MAP uses for alert cards —
+// duplicated here rather than shared, since it's just 4 colors and this is
+// the only other place that needs them.
+const ALERT_TONE_COLOR: Record<Alert['tone'], string> = {
+  red: '#FF5247', amber: '#E07820', cyan: '#38BDF8', green: '#36D399',
+}
 
 // The visible track is a moving window, not a fixed 24h day: the right edge
 // always sits `FUTURE_HOURS` ahead of the real clock (nothing can be
@@ -54,6 +62,8 @@ function alertTime(alert: Alert): number | null {
 }
 
 export function Timeline({ now, recordings, alerts, recording, cameras, streamPreset, onSetStreamPreset }: Props) {
+  const layoutMode = useLayoutMode()
+  const isMobile = layoutMode === 'mobile'
   const [activeRec, setActiveRec] = useState<Recording | null>(null)
   const [showOptimizeMenu, setShowOptimizeMenu] = useState(false)
   // Keeps the button visibly accented even after the menu closes, so a
@@ -176,8 +186,17 @@ export function Timeline({ now, recordings, alerts, recording, cameras, streamPr
     <>
       <footer style={{
         height: 104, flexShrink: 0, borderTop: '2px solid #20242A',
-        background: '#0C0E10', padding: '12px 22px',
-        display: 'flex', alignItems: 'center', gap: 22,
+        background: '#0C0E10', padding: isMobile ? '12px' : '12px 22px',
+        display: 'flex', alignItems: 'center', gap: isMobile ? 12 : 22,
+        // Safety net on mobile, not a redesign — this footer packs a lot of
+        // controls (transport buttons, hour-pan, the track itself, the
+        // OPTIMIZAR menu, the clock) that genuinely need real width to stay
+        // usable (especially the track, which needs to be draggable/
+        // tappable at a specific time position). Rather than cut controls
+        // to force-fit a phone's width, everything keeps its normal size
+        // and the footer scrolls horizontally instead — same tradeoff as
+        // Header.tsx.
+        overflowX: isMobile ? 'auto' : 'visible',
       }}>
         {/* Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -241,11 +260,14 @@ export function Timeline({ now, recordings, alerts, recording, cameras, streamPr
           <ChevronLeft size={16} />
         </button>
 
-        {/* Track */}
+        {/* Track — a minWidth on mobile keeps it draggable/tappable at a
+            real size instead of getting crushed to a sliver by flex:1 inside
+            the footer's overflow-x:auto row; the footer scrolls instead. */}
         <div
           onClick={handleClickTimeline}
           style={{
-            flex: 1, height: 60, border: '2px solid #20242A', borderRadius: 12,
+            flex: 1, height: 60, minWidth: isMobile ? 420 : undefined,
+            border: '2px solid #20242A', borderRadius: 12,
             background: '#0A0C0D', position: 'relative', cursor: 'pointer', overflow: 'hidden',
           }}
         >
@@ -296,24 +318,28 @@ export function Timeline({ now, recordings, alerts, recording, cameras, streamPr
             )
           })}
 
-          {/* Motion alert markers — separate from recording segments, since a
-              camera can alert without necessarily leaving a long recording */}
+          {/* Alert markers — separate from recording segments, since a camera
+              can alert without necessarily leaving a long recording. A thin
+              vertical line (colored by the alert's tone) rather than an
+              icon — reads clearly at a glance even at a glance/small size,
+              where a 10px icon tended to get lost against the track. */}
           {alerts.map((al, i) => {
             const t = alertTime(al)
             if (t === null) return null
             const leftPct = posForTime(t)
             if (leftPct < -5 || leftPct > 105) return null
+            const color = ALERT_TONE_COLOR[al.tone] ?? '#38BDF8'
             return (
               <div
                 key={al.id ?? i}
                 title={`${al.type} · ${al.cam} · ${al.zone} · ${al.time}`}
                 style={{
-                  position: 'absolute', top: 34, left: `calc(${leftPct}% - 5px)`,
-                  width: 10, height: 10, zIndex: 3, pointerEvents: 'none',
+                  position: 'absolute', top: 34, bottom: 4,
+                  left: leftPct + '%', transform: 'translateX(-50%)',
+                  width: 2, borderRadius: 1, zIndex: 3, pointerEvents: 'none',
+                  background: color, boxShadow: `0 0 4px ${color}`,
                 }}
-              >
-                <Radar size={10} color="#38BDF8" />
-              </div>
+              />
             )
           })}
 

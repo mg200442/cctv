@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { X, Video, Download, Trash2, Play } from 'lucide-react'
+import { X, Video, Download, Trash2, Play, Square, CheckSquare } from 'lucide-react'
 import type { Recording } from '@/hooks/useCameras'
 import { VideoPlayer } from './VideoPlayer'
 
@@ -12,10 +12,33 @@ interface Props {
   onClose: () => void
 }
 
+function thumbnailUrl(name: string): string {
+  return `/api/recordings/${encodeURIComponent(name)}/thumbnail`
+}
+
+// Triggers N downloads back-to-back with a small stagger — firing them all
+// in the same tick makes some browsers silently drop all but the first
+// (treated as popup-like spam without a fresh user gesture per click).
+function downloadAll(recs: Recording[]) {
+  recs.forEach((rec, i) => {
+    setTimeout(() => {
+      const a = document.createElement('a')
+      a.href = rec.url
+      a.download = rec.name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    }, i * 300)
+  })
+}
+
 export function CameraRecsModal({ cameraId, cameraLabel, recordings, initialRecordingName, onDelete, onClose }: Props) {
   const [activeRec, setActiveRec] = useState<Recording | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   // Opening the modal from an alert can race the recordings list: an
   // alert-triggered recording finishes seconds ago and might not be in
@@ -29,6 +52,20 @@ export function CameraRecsModal({ cameraId, cameraLabel, recordings, initialReco
   }, [initialRecordingName, recordings])
 
   const camRecs = recordings.filter(r => r.cameraId === cameraId)
+  const allSelected = camRecs.length > 0 && camRecs.every(r => selected.has(r.name))
+
+  function toggleSelected(name: string) {
+    setSelected(s => {
+      const next = new Set(s)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
+  function toggleSelectAll() {
+    setSelected(allSelected ? new Set() : new Set(camRecs.map(r => r.name)))
+  }
 
   async function handleDelete(name: string) {
     setDeleting(name)
@@ -38,6 +75,23 @@ export function CameraRecsModal({ cameraId, cameraLabel, recordings, initialReco
       setDeleting(null)
       setConfirmDelete(null)
       if (activeRec?.name === name) setActiveRec(null)
+    }
+  }
+
+  async function handleBulkDelete() {
+    setBulkDeleting(true)
+    try {
+      // Sequential, not Promise.all — onDelete re-fetches the recordings
+      // list after every call, so firing them all at once would mean N
+      // redundant concurrent fetches for what's typically a handful of files.
+      for (const name of selected) {
+        await onDelete(name)
+        if (activeRec?.name === name) setActiveRec(null)
+      }
+    } finally {
+      setSelected(new Set())
+      setConfirmBulkDelete(false)
+      setBulkDeleting(false)
     }
   }
 
@@ -53,7 +107,7 @@ export function CameraRecsModal({ cameraId, cameraLabel, recordings, initialReco
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          width: 540, maxHeight: '82vh', display: 'flex', flexDirection: 'column',
+          width: 560, maxHeight: '82vh', display: 'flex', flexDirection: 'column',
           background: '#0E1012', border: '2px solid #20242A', borderRadius: 16, overflow: 'hidden',
         }}
       >
@@ -112,6 +166,71 @@ export function CameraRecsModal({ cameraId, cameraLabel, recordings, initialReco
           </div>
         )}
 
+        {/* Selection bar — always shows "select all", switches to bulk
+            actions once something is checked. */}
+        {camRecs.length > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '8px 16px', borderBottom: '2px solid #20242A', flexShrink: 0,
+          }}>
+            <button
+              onClick={toggleSelectAll}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 7,
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: allSelected ? '#E07820' : '#7E858C',
+                fontFamily: "'DM Mono',monospace", fontSize: 9, letterSpacing: '.08em',
+              }}
+            >
+              {allSelected ? <CheckSquare size={13} /> : <Square size={13} />}
+              {selected.size > 0 ? `${selected.size} SELECCIONADA${selected.size !== 1 ? 'S' : ''}` : 'SELECCIONAR TODAS'}
+            </button>
+
+            {selected.size > 0 && (
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  onClick={() => downloadAll(camRecs.filter(r => selected.has(r.name)))}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    padding: '5px 10px', borderRadius: 6, cursor: 'pointer',
+                    border: '1px solid #20242A', background: '#0E1012', color: '#C9C4BB',
+                    fontFamily: "'DM Mono',monospace", fontSize: 9, letterSpacing: '.06em',
+                  }}
+                >
+                  <Download size={11} /> DESCARGAR
+                </button>
+                {confirmBulkDelete ? (
+                  <button
+                    onClick={handleBulkDelete}
+                    disabled={bulkDeleting}
+                    style={{
+                      padding: '5px 10px', borderRadius: 6, cursor: 'pointer',
+                      border: '1px solid #FF5247', background: '#1A0E0D',
+                      color: '#FF5247', fontSize: 9, letterSpacing: '.06em',
+                      fontFamily: "'DM Mono',monospace",
+                    }}
+                  >
+                    {bulkDeleting ? 'BORRANDO…' : `CONFIRMAR (${selected.size})`}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setConfirmBulkDelete(true)}
+                    onMouseLeave={() => setConfirmBulkDelete(false)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '5px 10px', borderRadius: 6, cursor: 'pointer',
+                      border: '1px solid #20242A', background: '#0E1012', color: '#C9C4BB',
+                      fontFamily: "'DM Mono',monospace", fontSize: 9, letterSpacing: '.06em',
+                    }}
+                  >
+                    <Trash2 size={11} /> BORRAR
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Recording list */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
           {camRecs.length === 0 && (
@@ -127,18 +246,53 @@ export function CameraRecsModal({ cameraId, cameraLabel, recordings, initialReco
             const isConfirming = confirmDelete === rec.name
             const isDeleting = deleting === rec.name
             const isPlaying = activeRec?.name === rec.name
+            const isSelected = selected.has(rec.name)
 
             return (
               <div
                 key={rec.name}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px',
-                  border: `2px solid ${isPlaying ? '#E07820' : '#20242A'}`,
+                  border: `2px solid ${isPlaying ? '#E07820' : isSelected ? '#3A3F47' : '#20242A'}`,
                   borderRadius: 10, background: isPlaying ? '#1A130A' : '#0A0C0D',
                   transition: 'border-color .15s',
                 }}
               >
-                <Video size={15} color={isPlaying ? '#E07820' : '#7E858C'} style={{ flexShrink: 0 }} />
+                <button
+                  onClick={() => toggleSelected(rec.name)}
+                  title={isSelected ? 'Deseleccionar' : 'Seleccionar'}
+                  style={{
+                    background: 'none', border: 'none', cursor: 'pointer', flexShrink: 0,
+                    color: isSelected ? '#E07820' : '#3A3F47', display: 'flex',
+                  }}
+                >
+                  {isSelected ? <CheckSquare size={15} /> : <Square size={15} />}
+                </button>
+
+                {/* Thumbnail — server generates it on first request (see
+                    /api/recordings/:file/thumbnail) and caches it, so this
+                    is just a plain <img>; a failed/slow generation (very
+                    old or corrupt file) falls back to the plain Video icon
+                    instead of a broken-image glyph. */}
+                <div style={{
+                  width: 56, height: 32, borderRadius: 5, flexShrink: 0, overflow: 'hidden',
+                  background: '#111417', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <img
+                    src={thumbnailUrl(rec.name)}
+                    alt=""
+                    loading="lazy"
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    onError={e => {
+                      e.currentTarget.style.display = 'none'
+                      const icon = e.currentTarget.nextElementSibling as HTMLElement | null
+                      if (icon) icon.style.display = 'flex'
+                    }}
+                  />
+                  <div style={{ display: 'none', alignItems: 'center', justifyContent: 'center' }}>
+                    <Video size={14} color="#565C63" />
+                  </div>
+                </div>
 
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 11, color: '#ECE8E1', letterSpacing: '.04em' }}>

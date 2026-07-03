@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   Play, Square, Trash2, Video, Camera as CameraIcon, Search as ScanIcon,
-  User, Car, Bike, Dog, Cat, Briefcase, LayoutGrid, List,
+  User, Car, Bike, Dog, Cat, Briefcase, LayoutGrid, List, Download,
 } from 'lucide-react'
 import type { Detection, DetectionStatus } from '@/types/camera'
 import { detectionFrameUrl } from '@/hooks/useDetection'
@@ -40,6 +40,8 @@ function parseName(name: string) {
 // One row per detected class per file — a video with both "person" and
 // "dog" hits shows as two entries, each with its own frame thumbnail, so
 // every claim is backed by the actual image the model saw.
+// cameraId/date/time are parsed once here (from parseName) rather than
+// re-parsed in every render spot that needs them.
 interface Hit {
   fileName: string
   kind: 'recording' | 'snapshot'
@@ -47,24 +49,70 @@ interface Hit {
   score: number
   frame: string
   scannedAt: string
+  cameraId: string
+  date: string
+  time: string
 }
 
 function toHits(results: Detection[], classFilter: string[]): Hit[] {
   const hits: Hit[] = []
   for (const r of results) {
+    const { cameraId, date, time } = parseName(r.name)
     for (const c of r.classes) {
       if (!classFilter.includes(c.class)) continue
-      hits.push({ fileName: r.name, kind: r.kind, class: c.class, score: c.score, frame: c.frame, scannedAt: r.scannedAt })
+      hits.push({ fileName: r.name, kind: r.kind, class: c.class, score: c.score, frame: c.frame, scannedAt: r.scannedAt, cameraId, date, time })
     }
   }
   return hits
+}
+
+// Quotes a field only if it needs it (contains a comma/quote/newline) — a
+// blanket-quote-everything approach works too, but this reads cleaner in
+// the exported file for the common case (plain filenames/class names).
+function csvField(v: string): string {
+  return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v
+}
+
+function exportHitsCsv(hits: Hit[]) {
+  const header = ['archivo', 'tipo', 'camara', 'fecha', 'hora', 'clase', 'confianza', 'analizado_en']
+  const rows = hits.map(h => [
+    h.fileName, h.kind, h.cameraId, h.date, h.time, h.class, `${Math.round(h.score * 100)}%`, h.scannedAt,
+  ])
+  const csv = [header, ...rows].map(row => row.map(csvField).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `detecciones_${new Date().toISOString().slice(0, 10)}.csv`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 export function DetectionPanel({
   status, results, classFilter, onRun, onStop, onClearResults, onViewRecording, onViewSnapshot,
 }: Props) {
   const [view, setView] = useState<'list' | 'gallery'>('gallery')
-  const hits = toHits(results, classFilter)
+  const [search, setSearch] = useState('')
+  const [cameraFilter, setCameraFilter] = useState('all')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+
+  const allHits = toHits(results, classFilter)
+  const cameraIds = [...new Set(allHits.map(h => h.cameraId))].sort()
+  // Search/camera/date are filters over this panel's own view, separate
+  // from classFilter (that one comes from Settings and controls what the
+  // server-side scan even keeps around, not just what's displayed here).
+  const q = search.trim().toLowerCase()
+  const hits = allHits.filter(h => {
+    if (cameraFilter !== 'all' && h.cameraId !== cameraFilter) return false
+    if (dateFrom && h.date < dateFrom) return false
+    if (dateTo && h.date > dateTo) return false
+    if (q && !h.class.toLowerCase().includes(q) && !h.fileName.toLowerCase().includes(q) && !h.cameraId.toLowerCase().includes(q)) return false
+    return true
+  })
+  const filtersActive = cameraFilter !== 'all' || !!dateFrom || !!dateTo || !!q
   const progressPct = status.total > 0 ? Math.round((status.done / status.total) * 100) : 0
 
   const openSource = (hit: Hit) => hit.kind === 'recording' ? onViewRecording(hit.fileName) : onViewSnapshot(hit.fileName)
@@ -146,9 +194,61 @@ export function DetectionPanel({
         )}
 
         {results.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative', flex: '2 1 200px', minWidth: 160 }}>
+              <ScanIcon size={12} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: '#565C63' }} />
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Buscar clase, cámara o archivo…"
+                style={{
+                  width: '100%', boxSizing: 'border-box', padding: '7px 9px 7px 28px',
+                  borderRadius: 8, border: '2px solid #20242A', background: '#0A0C0D',
+                  color: '#ECE8E1', fontFamily: "'DM Mono',monospace", fontSize: 10, outline: 'none',
+                }}
+              />
+            </div>
+            <select
+              value={cameraFilter}
+              onChange={e => setCameraFilter(e.target.value)}
+              style={{
+                flex: '1 1 120px', padding: '7px 9px', borderRadius: 8,
+                border: '2px solid #20242A', background: '#0A0C0D', color: '#C9C4BB',
+                fontFamily: "'DM Mono',monospace", fontSize: 10, outline: 'none', cursor: 'pointer',
+              }}
+            >
+              <option value="all">TODAS LAS CÁMARAS</option>
+              {cameraIds.map(id => <option key={id} value={id}>{id.toUpperCase()}</option>)}
+            </select>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={e => setDateFrom(e.target.value)}
+              title="Desde"
+              style={{
+                flex: '1 1 130px', padding: '6px 9px', borderRadius: 8,
+                border: '2px solid #20242A', background: '#0A0C0D', color: '#C9C4BB',
+                fontFamily: "'DM Mono',monospace", fontSize: 10, outline: 'none',
+              }}
+            />
+            <input
+              type="date"
+              value={dateTo}
+              onChange={e => setDateTo(e.target.value)}
+              title="Hasta"
+              style={{
+                flex: '1 1 130px', padding: '6px 9px', borderRadius: 8,
+                border: '2px solid #20242A', background: '#0A0C0D', color: '#C9C4BB',
+                fontFamily: "'DM Mono',monospace", fontSize: 10, outline: 'none',
+              }}
+            />
+          </div>
+        )}
+
+        {results.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
             <span style={{ fontSize: 9, letterSpacing: '.1em', color: '#7E858C' }}>
-              {hits.length} DETECCIONES · {results.length} ARCHIVOS ANALIZADOS
+              {hits.length} DETECCIONES{hits.length !== allHits.length ? ` (DE ${allHits.length})` : ''} · {results.length} ARCHIVOS ANALIZADOS
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <div style={{ display: 'flex', border: '1px solid #20242A', borderRadius: 8, overflow: 'hidden' }}>
@@ -169,6 +269,20 @@ export function DetectionPanel({
                 ))}
               </div>
               <button
+                onClick={() => exportHitsCsv(hits)}
+                disabled={hits.length === 0}
+                title="Exportar los resultados visibles (con los filtros aplicados) a CSV"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '6px 12px', borderRadius: 8, cursor: hits.length === 0 ? 'default' : 'pointer',
+                  border: '1px solid #20242A', background: '#0E1012',
+                  color: hits.length === 0 ? '#3A3F47' : '#7E858C', fontSize: 9, letterSpacing: '.06em',
+                  fontFamily: "'DM Mono',monospace",
+                }}
+              >
+                <Download size={11} /> EXPORTAR CSV
+              </button>
+              <button
                 onClick={onClearResults}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 6,
@@ -186,14 +300,15 @@ export function DetectionPanel({
 
         {results.length > 0 && hits.length === 0 && (
           <div style={{ padding: '32px 0', textAlign: 'center', fontSize: 11, color: '#565C63' }}>
-            Nada detectado con los filtros activos (revisa Configuración).
+            {filtersActive
+              ? 'Nada coincide con los filtros de este panel.'
+              : 'Nada detectado con los filtros activos (revisa Configuración).'}
           </div>
         )}
 
         {view === 'gallery' ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
             {hits.map((h, i) => {
-              const { cameraId, date, time } = parseName(h.fileName)
               const Icon = CLASS_ICON[h.class] ?? ScanIcon
               return (
                 <div
@@ -233,7 +348,7 @@ export function DetectionPanel({
                   </div>
                   <div style={{ padding: '8px 10px' }}>
                     <div style={{ fontSize: 10, color: '#ECE8E1', letterSpacing: '.02em' }}>
-                      {cameraId.toUpperCase()} · {date} {time}
+                      {h.cameraId.toUpperCase()} · {h.date} {h.time}
                     </div>
                     <div style={{ fontSize: 8, color: '#565C63', marginTop: 2 }}>
                       fuente: {h.fileName}
@@ -246,7 +361,6 @@ export function DetectionPanel({
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {hits.map((h, i) => {
-              const { cameraId, date, time } = parseName(h.fileName)
               const Icon = CLASS_ICON[h.class] ?? ScanIcon
               return (
                 <div
@@ -274,7 +388,7 @@ export function DetectionPanel({
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 11, color: '#ECE8E1', letterSpacing: '.02em' }}>
-                      {cameraId.toUpperCase()} · {date} {time}
+                      {h.cameraId.toUpperCase()} · {h.date} {h.time}
                     </div>
                     <div style={{ fontSize: 8, color: '#565C63', marginTop: 3 }}>
                       fuente: {h.fileName}
